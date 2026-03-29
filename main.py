@@ -1,5 +1,5 @@
 import sys, os, subprocess, threading, time, sqlite3, configparser, webbrowser, ctypes, socket
-from PyQt5.QtCore import QTimer, QEvent, Qt
+from PyQt5.QtCore import QTimer, QEvent, Qt, pyqtSignal, QObject
 from datetime import datetime
 from croniter import croniter
 from PyQt5.QtWidgets import (QApplication, QWidget, QPushButton, QLabel,
@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QPushButton, QLabel,
                              QComboBox, QMessageBox,
                              QSystemTrayIcon, QMenu, QAction, QStyle)
 from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import Qt
 
 if getattr(sys, 'frozen', False):
     # Lokasi folder tempat file .exe berada (untuk DB, INI, dan folder server)
@@ -24,13 +25,18 @@ APACHE_PATH = os.path.join(BASE_PATH, "apache", "bin", "httpd.exe")
 MYSQL_PATH = os.path.join(BASE_PATH, "mysql", "bin", "mysqld.exe")
 REDIS_PATH = os.path.join(BASE_PATH, "redis", "redis-server.exe")
 
+class LogSignal(QObject):
+    updated = pyqtSignal()
+
+log_signal = LogSignal()
+
 # --- Localization ---
 config = configparser.ConfigParser()
-config.read(INI_PATH)
+config.read(INI_PATH, encoding='utf-8')
 
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(1)
+        s.settimeout(0.2)
         return s.connect_ex(('127.0.0.1', port)) == 0
 
 def replace_and_write(template_name, target_path):
@@ -40,7 +46,7 @@ def replace_and_write(template_name, target_path):
         return
     
     try:
-        with open(template_path, "r") as f:
+        with open(template_path, "r", encoding='utf-8') as f:
             content = f.read()
         
         # Replace ${INSTALL_DIR} dengan BASE_PATH (menggunakan forward slash untuk config)
@@ -49,7 +55,7 @@ def replace_and_write(template_name, target_path):
         content = content.replace("${INSTALL_DIR}", clean_base)
         
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        with open(target_path, "w") as f:
+        with open(target_path, "w", encoding='utf-8') as f:
             f.write(content)
         add_log(f"Generated config: {os.path.basename(target_path)}")
     except Exception as e:
@@ -140,6 +146,7 @@ def add_log(message, level="INFO"):
     cur.execute("INSERT INTO logs (timestamp, level, message) VALUES (?, ?, ?)", (ts, level, message))
     conn.commit()
     conn.close()
+    log_signal.updated.emit()
 
 def get_setting(key, default='0'):
     conn = sqlite3.connect(DB_PATH)
@@ -179,40 +186,60 @@ def scheduler_loop():
 
 # --- Access control (edit config files) ---
 def set_apache_access(external=False):
-    conf_path = os.path.join(BASE_PATH, "apache", "conf", "httpd.conf")
+    conf_path = os.path.join(BASE_PATH, "config", "httpd.conf")
     if os.path.exists(conf_path):
-        with open(conf_path, "r") as f:
+        with open(conf_path, "r", encoding='utf-8') as f:
             lines = f.readlines()
-        with open(conf_path, "w") as f:
+        with open(conf_path, "w", encoding='utf-8') as f:
             for line in lines:
                 if line.strip().startswith("Listen"):
                     f.write("Listen 0.0.0.0:80\n" if external else "Listen 127.0.0.1:80\n")
                 else:
                     f.write(line)
+        add_log(f"Apache access mode changed to {'Online' if external else 'Offline'}")
 
 def set_mysql_access(external=False):
-    conf_path = os.path.join(BASE_PATH, "mysql", "my.ini")
+    conf_path = os.path.join(BASE_PATH, "config", "my.ini")
     if os.path.exists(conf_path):
-        with open(conf_path, "r") as f:
+        with open(conf_path, "r", encoding='utf-8') as f:
             lines = f.readlines()
-        with open(conf_path, "w") as f:
-            for line in lines:
-                if line.strip().startswith("bind-address"):
-                    f.write("bind-address=0.0.0.0\n" if external else "bind-address=127.0.0.1\n")
-                else:
-                    f.write(line)
+        
+        new_val = "0.0.0.0" if external else "127.0.0.1"
+        found = False
+        new_lines = []
+        for line in lines:
+            if line.strip().startswith("bind-address"):
+                new_lines.append(f"bind-address={new_val}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        
+        if not found:
+            # Jika tidak ditemukan, sisipkan di bawah section [mysqld]
+            final_lines = []
+            for line in new_lines:
+                final_lines.append(line)
+                if "[mysqld]" in line:
+                    final_lines.append(f"bind-address={new_val}\n")
+                    found = True
+            new_lines = final_lines if found else new_lines + [f"\n[mysqld]\nbind-address={new_val}\n"]
+
+        with open(conf_path, "w", encoding='utf-8') as f:
+            f.writelines(new_lines)
+        add_log(f"MariaDB access mode changed to {'Online' if external else 'Offline'}")
 
 def set_redis_access(external=False):
-    conf_path = os.path.join(BASE_PATH, "redis", "redis.conf")
+    conf_path = os.path.join(BASE_PATH, "redis", "redis.windows.conf")
     if os.path.exists(conf_path):
-        with open(conf_path, "r") as f:
+        with open(conf_path, "r", encoding='utf-8') as f:
             lines = f.readlines()
-        with open(conf_path, "w") as f:
+        with open(conf_path, "w", encoding='utf-8') as f:
             for line in lines:
                 if line.strip().startswith("bind"):
                     f.write("bind 0.0.0.0\n" if external else "bind 127.0.0.1\n")
                 else:
                     f.write(line)
+        add_log(f"Redis access mode changed to {'Online' if external else 'Offline'}")
 
 class ControlPanel(QWidget):
     def __init__(self):
@@ -251,6 +278,8 @@ class ControlPanel(QWidget):
             self.setWindowIcon(QIcon(icon_path))
 
         self.current_lang = get_setting('language', 'en')
+
+        self.apply_layout_direction()
 
         # System Tray Icon
 
@@ -355,9 +384,9 @@ class ControlPanel(QWidget):
         self.btn_apache_stop = QPushButton()
         self.btn_apache_stop.clicked.connect(lambda: self.stop_service("apache"))
         self.btn_apache_local = QPushButton()
-        self.btn_apache_local.clicked.connect(lambda: set_apache_access(False))
+        self.btn_apache_local.clicked.connect(lambda: self.change_access("apache", False))
         self.btn_apache_external = QPushButton()
-        self.btn_apache_external.clicked.connect(lambda: set_apache_access(True))
+        self.btn_apache_external.clicked.connect(lambda: self.change_access("apache", True))
 
         # Tombol MariaDB
         self.btn_mysql_manual = QPushButton()
@@ -365,9 +394,9 @@ class ControlPanel(QWidget):
         self.btn_mysql_stop = QPushButton()
         self.btn_mysql_stop.clicked.connect(lambda: self.stop_service("mysql"))
         self.btn_mysql_local = QPushButton()
-        self.btn_mysql_local.clicked.connect(lambda: set_mysql_access(False))
+        self.btn_mysql_local.clicked.connect(lambda: self.change_access("mysql", False))
         self.btn_mysql_external = QPushButton()
-        self.btn_mysql_external.clicked.connect(lambda: set_mysql_access(True))
+        self.btn_mysql_external.clicked.connect(lambda: self.change_access("mysql", True))
 
         # Tombol Redis
         self.btn_redis_manual = QPushButton()
@@ -375,9 +404,9 @@ class ControlPanel(QWidget):
         self.btn_redis_stop = QPushButton()
         self.btn_redis_stop.clicked.connect(lambda: self.stop_service("redis"))
         self.btn_redis_local = QPushButton()
-        self.btn_redis_local.clicked.connect(lambda: set_redis_access(False))
+        self.btn_redis_local.clicked.connect(lambda: self.change_access("redis", False))
         self.btn_redis_external = QPushButton()
-        self.btn_redis_external.clicked.connect(lambda: set_redis_access(True))
+        self.btn_redis_external.clicked.connect(lambda: self.change_access("redis", True))
 
         # Scheduler UI
         self.scheduler_label = QLabel()
@@ -404,6 +433,8 @@ class ControlPanel(QWidget):
         self.btn_edit_job.clicked.connect(self.edit_job)
         self.btn_delete_job = QPushButton()
         self.btn_delete_job.clicked.connect(self.delete_job)
+
+        log_signal.updated.connect(self.load_logs)
 
         # --- Layout setup (Grid) ---
         layout = QGridLayout()
@@ -447,17 +478,17 @@ class ControlPanel(QWidget):
         layout.addWidget(self.job_table, 6, 0, 1, 5)
 
         # Baris 7: Table Actions
-        layout.addWidget(self.btn_edit_job, 7, 0, 1, 3)
-        layout.addWidget(self.btn_delete_job, 7, 3, 1, 2)
+        layout.addWidget(self.btn_edit_job, 7, 3)
+        layout.addWidget(self.btn_delete_job, 7, 4)
 
-        # Baris 8: Global Settings
+        # Baris 8 dan 9: Global Settings
         layout.addWidget(self.chk_run_startup, 8, 0, 1, 2)
-        layout.addWidget(self.chk_auto_start_services, 8, 2, 1, 3)
+        layout.addWidget(self.chk_auto_start_services, 9, 0, 1, 2)
 
-        # Baris 9-10: Logs
-        layout.addWidget(self.log_label, 9, 0, 1, 4)
-        layout.addWidget(self.btn_clear_logs, 9, 4)
-        layout.addWidget(self.log_table, 10, 0, 1, 5)
+        # Baris 10-11: Logs
+        layout.addWidget(self.log_label, 10, 0, 1, 4)
+        layout.addWidget(self.btn_clear_logs, 10, 4)
+        layout.addWidget(self.log_table, 11, 0, 1, 5)
 
         self.setLayout(layout)
 
@@ -468,20 +499,34 @@ class ControlPanel(QWidget):
 
         self.update_texts()
 
+        # Timer to periodically update service status
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self.update_service_status)
+        self.status_timer.start(2000)
+
+    def get_lang_dir(self, lang):
+        if lang in config and 'lang_dir' in config[lang]:
+            return config[lang]['lang_dir'].lower()
+        return 'ltr'  # default
+
+    def apply_layout_direction(self):
+        direction = self.get_lang_dir(self.current_lang)
+        if direction == 'rtl':
+            self.setLayoutDirection(Qt.RightToLeft)
+        else:
+            self.setLayoutDirection(Qt.LeftToRight)
+
     def update_texts(self):
-        self.apache_status.setText(tr(self.current_lang, "apache_status"))
         self.btn_apache_manual.setText(tr(self.current_lang, "btn_apache_run"))
         self.btn_apache_stop.setText(tr(self.current_lang, "btn_apache_stop"))
         self.btn_apache_local.setText(tr(self.current_lang, "btn_apache_local"))
         self.btn_apache_external.setText(tr(self.current_lang, "btn_apache_external"))
 
-        self.mysql_status.setText(tr(self.current_lang, "mysql_status"))
         self.btn_mysql_manual.setText(tr(self.current_lang, "btn_mysql_run"))
         self.btn_mysql_stop.setText(tr(self.current_lang, "btn_mysql_stop"))
         self.btn_mysql_local.setText(tr(self.current_lang, "btn_mysql_local"))
         self.btn_mysql_external.setText(tr(self.current_lang, "btn_mysql_external"))
 
-        self.redis_status.setText(tr(self.current_lang, "redis_status"))
         self.btn_redis_manual.setText(tr(self.current_lang, "btn_redis_run"))
         self.btn_redis_stop.setText(tr(self.current_lang, "btn_redis_stop"))
         self.btn_redis_local.setText(tr(self.current_lang, "btn_redis_local"))
@@ -523,12 +568,73 @@ class ControlPanel(QWidget):
         ])
         self.log_table.resizeColumnsToContents()
 
+        self.update_service_status()
+        self.apply_layout_direction()
+
     def change_language(self, index):
         code = self.lang_selector.itemData(index)
         if code:
             self.current_lang = code
             set_setting('language', code)
             self.update_texts()
+
+    def change_access(self, name, external):
+        if name == "apache": set_apache_access(external)
+        elif name == "mysql": set_mysql_access(external)
+        elif name == "redis": set_redis_access(external)
+        self.update_service_status()
+
+    def check_online_config(self, name):
+        if name == "apache":
+            conf_path = os.path.join(BASE_PATH, "config", "httpd.conf")
+            search_str = "Listen 0.0.0.0"
+        elif name == "mysql":
+            conf_path = os.path.join(BASE_PATH, "config", "my.ini")
+            search_str = "bind-address=0.0.0.0"
+        elif name == "redis":
+            conf_path = os.path.join(BASE_PATH, "redis", "redis.windows.conf")
+            search_str = "bind 0.0.0.0"
+        else:
+            return False
+
+        if os.path.exists(conf_path):
+            try:
+                with open(conf_path, "r", encoding='utf-8') as f:
+                    content = f.read().replace(" ", "")
+                    clean_search = search_str.replace(" ", "")
+                    return clean_search in content
+            except:
+                pass
+        return False
+
+    def update_service_status(self):
+        online_str = tr(self.current_lang, "status_online")
+        offline_str = tr(self.current_lang, "status_offline")
+
+        def get_status_info(name, port):
+            is_running = is_port_in_use(port)
+            is_online = self.check_online_config(name)
+            if is_running:
+                base_text = tr(self.current_lang, f"{name}_status_running")
+                mode = online_str if is_online else offline_str
+                return f"{base_text} ({mode})", "color: green; font-weight: bold;"
+            else:
+                return tr(self.current_lang, f"{name}_status"), "color: red;"
+
+        # Apache
+        text, style = get_status_info("apache", 80)
+        self.apache_status.setText(text)
+        self.apache_status.setStyleSheet(style)
+
+        # MySQL
+        text, style = get_status_info("mysql", 3306)
+        self.mysql_status.setText(text)
+        self.mysql_status.setStyleSheet(style)
+
+        # Redis
+        text, style = get_status_info("redis", 6379)
+        self.redis_status.setText(text)
+        self.redis_status.setStyleSheet(style)
 
     def toggle_startup(self, state):
         enabled = (state == 2) # Qt.Checked
@@ -584,11 +690,13 @@ class ControlPanel(QWidget):
         set_apache_access(True)
         set_mysql_access(True)
         set_redis_access(True)
+        self.update_service_status()
 
     def set_all_offline(self):
         set_apache_access(False)
         set_mysql_access(False)
         set_redis_access(False)
+        self.update_service_status()
 
     def run_service(self, name, path):
         service_root = os.path.dirname(os.path.dirname(path))
@@ -600,7 +708,6 @@ class ControlPanel(QWidget):
 
         if not os.path.exists(path):
             add_log(f"FAILED: Path not found - {path}", "ERROR")
-            self.load_logs()
             return
 
         try:
@@ -625,7 +732,7 @@ class ControlPanel(QWidget):
             add_log(f"SUCCESS: {name} started (PID: {proc.pid})")
         except Exception as e:
             add_log(f"FAILED to start {name}: {str(e)}", "ERROR")
-        self.load_logs()
+        self.update_service_status()
 
     def stop_service(self, name):
         add_log(f"Stopping service: {name}")
@@ -648,6 +755,7 @@ class ControlPanel(QWidget):
             add_log(f"Command sent to stop {exe_name}")
 
         setattr(self, f"{name}_proc", None)
+        self.update_service_status()
 
     def load_jobs(self):
         self.job_table.setRowCount(0)
