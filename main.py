@@ -675,6 +675,7 @@ class ControlPanel(QWidget):
             set_setting('window_height', str(self.height()))
 
     def closeEvent(self, event):
+        self.stop_all_services()
         QApplication.instance().quit()
 
     def start_all_services(self):
@@ -874,5 +875,10 @@ if __name__ == "__main__":
         if 'app' not in locals():
             error_app = QApplication(sys.argv)
             
+        # Jangan tampilkan pesan jika error terkait pembersihan folder temporary PyInstaller
+        error_str = str(e)
+        if "_MEI" in error_str and ("temporary directory" in error_str or "directory is not empty" in error_str.lower()):
+            sys.exit(0)
+
         QMessageBox.critical(None, tr(lang, "fatal_error_title"), f"{tr(lang, 'fatal_error_msg')}\n{str(e)}")
         sys.exit(1)
