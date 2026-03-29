@@ -149,6 +149,7 @@ def init_db():
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_port', '80')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_port', '3306')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_port', '6379')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mariadb_installed', '0')")
     conn.commit()
     conn.close()
 
@@ -889,6 +890,31 @@ class ControlPanel(QWidget):
         set_redis_access(False)
         self.update_service_status()
 
+    def initialize_mariadb(self):
+        add_log("Checking MariaDB data directory...")
+        data_dir = os.path.join(BASE_PATH, "data", "mysql")
+        system_db_dir = os.path.join(data_dir, "mysql")
+        
+        if not os.path.exists(system_db_dir):
+            add_log("MariaDB system database not found. Starting installation...")
+            install_bin = os.path.join(BASE_PATH, "mysql", "bin", "mariadb-install-db.exe")
+            if not os.path.exists(install_bin):
+                add_log("CRITICAL: mariadb-install-db.exe not found!", "ERROR")
+                return False
+            
+            try:
+                # Menjalankan proses inisialisasi secara sinkron (menunggu selesai)
+                subprocess.run([install_bin, f"--datadir={data_dir}"], 
+                               cwd=os.path.join(BASE_PATH, "mysql"),
+                               creationflags=subprocess.CREATE_NO_WINDOW,
+                               check=True)
+                add_log("MariaDB installation completed successfully.")
+                return True
+            except Exception as e:
+                add_log(f"MariaDB installation failed: {str(e)}", "ERROR")
+                return False
+        return True
+
     def run_service(self, name, path):
         service_root = os.path.dirname(os.path.dirname(path))
         
@@ -904,6 +930,11 @@ class ControlPanel(QWidget):
         if not os.path.exists(path):
             add_log(f"FAILED: Path not found - {path}", "ERROR")
             return
+
+        if name == "mysql":
+            if get_setting('mariadb_installed', '0') != '1':
+                if not self.initialize_mariadb():
+                    return
 
         try:
             args = [path]
@@ -922,7 +953,9 @@ class ControlPanel(QWidget):
             proc = subprocess.Popen(args, cwd=service_root, creationflags=subprocess.CREATE_NO_WINDOW)
             
             if name == "apache": self.apache_proc = proc
-            elif name == "mysql": self.mysql_proc = proc
+            elif name == "mysql": 
+                self.mysql_proc = proc
+                set_setting('mariadb_installed', '1')
             elif name == "redis": self.redis_proc = proc
             add_log(f"SUCCESS: {name} started (PID: {proc.pid})")
         except Exception as e:
