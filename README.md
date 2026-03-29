@@ -8,10 +8,11 @@ A lightweight, portable server management tool built with Python and PyQt5. This
 *   **Access Control:** Quickly toggle services between **Local Mode** (127.0.0.1) and **Public Mode** (0.0.0.0).
 *   **Cron Scheduler:** Manage scheduled tasks using standard cron expressions to execute system commands.
 *   **System Tray Integration:** Run the application in the background. Minimize to tray and control services via the context menu.
+*   **Port Collision Detection:** Automatically checks if ports 80 (Apache) or 3306 (MySQL) are already in use before starting services.
 *   **Activity Logging:** Real-time logging of service actions and environment changes, stored in a local SQLite database.
 *   **Automatic Configuration:** Automatically generates configuration files (`httpd.conf`, `php.ini`, `my.ini`, `redis.conf`) from templates, dynamically injecting the current installation directory path.
-*   **Multi-language Support:** Support for English and Indonesian languages with settings persistence.
-*   **Windows Integration:** Option to run on Windows startup and prevent multiple instances of the application from running simultaneously.
+*   **Multi-language Support:** Comprehensive localization including English, Indonesian, Malay, Javanese, Sundanese, Chinese, Japanese, Korean, Hindi, and Arabic (with RTL support).
+*   **Windows Integration:** Option to run on Windows startup and built-in Mutex to prevent multiple instances from running.
 *   **Responsive UI:** Remembers your window size and maximization state for the next session.
 
 ## 🛠️ Prerequisites
@@ -62,7 +63,23 @@ A lightweight, portable server management tool built with Python and PyQt5. This
 To bundle the application into a single `.exe` file using PyInstaller:
 
 ```bash
-pyinstaller --noconsole --onefile --icon=icon.ico --add-data "*.png;." main.py
+python -m PyInstaller ^
+  --noconsole ^
+  --onefile ^
+  --name PortableServer ^
+  --icon=icon.ico ^
+  --hidden-import=croniter ^
+  --hidden-import=dateutil ^
+  --add-data "icon.ico;." ^
+  --add-data "maximize.png;." ^
+  --add-data "minimize.png;." ^
+  --add-data "start.png;." ^
+  --add-data "stop.png;." ^
+  --add-data "online.png;." ^
+  --add-data "offline.png;." ^
+  --add-data "exit.png;." ^
+  --exclude-module numpy --exclude-module pandas --exclude-module matplotlib ^
+  main.py
 ```
 
 ## 📄 License

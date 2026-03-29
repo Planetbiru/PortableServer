@@ -5,7 +5,7 @@ from croniter import croniter
 from PyQt5.QtWidgets import (QApplication, QWidget, QPushButton, QLabel,
                              QGridLayout, QLineEdit, QTableWidget, QTableWidgetItem, QCheckBox,
                              QComboBox, QMessageBox,
-                             QSystemTrayIcon, QMenu, QAction, QStyle)
+                             QSystemTrayIcon, QMenu, QAction, QStyle, QDialog)
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
 
@@ -53,6 +53,9 @@ def replace_and_write(template_name, target_path):
         clean_base = BASE_PATH.replace("\\", "/")
         content = content.replace("{ROOT}", clean_base)
         content = content.replace("${INSTALL_DIR}", clean_base)
+        content = content.replace("{APACHE_PORT}", get_setting('apache_port', '80'))
+        content = content.replace("{MYSQL_PORT}", get_setting('mysql_port', '3306'))
+        content = content.replace("{REDIS_PORT}", get_setting('redis_port', '6379'))
         
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
         with open(target_path, "w", encoding='utf-8') as f:
@@ -115,8 +118,14 @@ def init_db():
     cur.execute("""CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         cron_expr TEXT NOT NULL,
-        command TEXT NOT NULL
+        command TEXT NOT NULL,
+        enabled INTEGER DEFAULT 1
     )""")
+    try:
+        cur.execute("ALTER TABLE jobs ADD COLUMN enabled INTEGER DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+
     cur.execute("""CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
@@ -137,6 +146,9 @@ def init_db():
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_access_mode', 'local')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_access_mode', 'local')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_access_mode', 'local')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_port', '80')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_port', '3306')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_port', '6379')")
     conn.commit()
     conn.close()
 
@@ -172,7 +184,7 @@ def scheduler_loop():
         now = datetime.now()
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute("SELECT cron_expr, command FROM jobs")
+        cur.execute("SELECT cron_expr, command FROM jobs WHERE enabled=1")
         jobs = cur.fetchall()
         conn.close()
 
@@ -190,13 +202,14 @@ def scheduler_loop():
 # --- Access control (edit config files) ---
 def set_apache_access(external=False):
     conf_path = os.path.join(BASE_PATH, "config", "httpd.conf")
+    port = get_setting('apache_port', '80')
     if os.path.exists(conf_path):
         with open(conf_path, "r", encoding='utf-8') as f:
             lines = f.readlines()
         with open(conf_path, "w", encoding='utf-8') as f:
             for line in lines:
                 if line.strip().startswith("Listen"):
-                    f.write("Listen 0.0.0.0:80\n" if external else "Listen 127.0.0.1:80\n")
+                    f.write(f"Listen 0.0.0.0:{port}\n" if external else f"Listen 127.0.0.1:{port}\n")
                 else:
                     f.write(line)
         set_setting('apache_access_mode', 'external' if external else 'local')
@@ -204,6 +217,7 @@ def set_apache_access(external=False):
 
 def set_mysql_access(external=False):
     conf_path = os.path.join(BASE_PATH, "config", "my.ini")
+    port = get_setting('mysql_port', '3306')
     if os.path.exists(conf_path):
         with open(conf_path, "r", encoding='utf-8') as f:
             lines = f.readlines()
@@ -215,6 +229,8 @@ def set_mysql_access(external=False):
             if line.strip().startswith("bind-address"):
                 new_lines.append(f"bind-address={new_val}\n")
                 found = True
+            elif line.strip().startswith("port="):
+                new_lines.append(f"port={port}\n")
             else:
                 new_lines.append(line)
         
@@ -235,6 +251,7 @@ def set_mysql_access(external=False):
 
 def set_redis_access(external=False):
     conf_path = os.path.join(BASE_PATH, "redis", "redis.windows.conf")
+    port = get_setting('redis_port', '6379')
     if os.path.exists(conf_path):
         with open(conf_path, "r", encoding='utf-8') as f:
             lines = f.readlines()
@@ -242,10 +259,165 @@ def set_redis_access(external=False):
             for line in lines:
                 if line.strip().startswith("bind"):
                     f.write("bind 0.0.0.0\n" if external else "bind 127.0.0.1\n")
+                elif line.strip().startswith("port "):
+                    f.write(f"port {port}\n")
                 else:
                     f.write(line)
         set_setting('redis_access_mode', 'external' if external else 'local')
         add_log(f"Redis access mode changed to {'Online' if external else 'Offline'}")
+
+class SettingsDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.setWindowTitle(tr(parent.current_lang, "settings_title"))
+        self.setModal(True)
+        self.resize(300, 200)
+        
+        layout = QGridLayout()
+        
+        layout.addWidget(QLabel(tr(parent.current_lang, "lbl_apache_port")), 0, 0)
+        self.apache_port = QLineEdit(get_setting('apache_port', '80'))
+        self.apache_port.setToolTip(tr(parent.current_lang, "help_apache_port"))
+        layout.addWidget(self.apache_port, 0, 1)
+        
+        layout.addWidget(QLabel(tr(parent.current_lang, "lbl_mysql_port")), 1, 0)
+        self.mysql_port = QLineEdit(get_setting('mysql_port', '3306'))
+        self.mysql_port.setToolTip(tr(parent.current_lang, "help_mysql_port"))
+        layout.addWidget(self.mysql_port, 1, 1)
+        
+        layout.addWidget(QLabel(tr(parent.current_lang, "lbl_redis_port")), 2, 0)
+        self.redis_port = QLineEdit(get_setting('redis_port', '6379'))
+        self.redis_port.setToolTip(tr(parent.current_lang, "help_redis_port"))
+        layout.addWidget(self.redis_port, 2, 1)
+        
+        self.btn_save = QPushButton(tr(parent.current_lang, "btn_save"))
+        self.btn_save.clicked.connect(self.save)
+        layout.addWidget(self.btn_save, 3, 0, 1, 2)
+        
+        self.setLayout(layout)
+        direction = self.parent.get_lang_dir(self.parent.current_lang)
+        self.setLayoutDirection(Qt.RightToLeft if direction == 'rtl' else Qt.LeftToRight)
+        
+    def save(self):
+        set_setting('apache_port', self.apache_port.text())
+        set_setting('mysql_port', self.mysql_port.text())
+        set_setting('redis_port', self.redis_port.text())
+        self.parent.apply_port_settings()
+        self.accept()
+
+class SchedulerDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.setWindowTitle(tr(parent.current_lang, "scheduler_title"))
+        self.setModal(True)
+        self.resize(600, 450)
+        
+        layout = QGridLayout()
+        
+        layout.addWidget(QLabel(tr(parent.current_lang, "col_cron")), 0, 0)
+        self.cron_input = QLineEdit("*/1 * * * *")
+        layout.addWidget(self.cron_input, 0, 1)
+        
+        layout.addWidget(QLabel(tr(parent.current_lang, "col_cmd")), 1, 0)
+        self.cmd_input = QLineEdit("")
+        layout.addWidget(self.cmd_input, 1, 1)
+        
+        self.chk_enabled = QCheckBox(tr(parent.current_lang, "lbl_enabled"))
+        self.chk_enabled.setChecked(True)
+        layout.addWidget(self.chk_enabled, 2, 1)
+        
+        self.btn_add = QPushButton(tr(parent.current_lang, "btn_add_job"))
+        self.btn_add.clicked.connect(self.add_job)
+        layout.addWidget(self.btn_add, 3, 0, 1, 2)
+        
+        self.job_table = QTableWidget()
+        self.job_table.setColumnCount(4)
+        self.job_table.setHorizontalHeaderLabels([
+            tr(parent.current_lang, "col_id"),
+            tr(parent.current_lang, "col_cron"),
+            tr(parent.current_lang, "col_cmd"),
+            tr(parent.current_lang, "col_enabled")
+        ])
+        self.job_table.itemClicked.connect(self.on_item_clicked)
+        layout.addWidget(self.job_table, 4, 0, 1, 2)
+        
+        self.btn_edit = QPushButton(tr(parent.current_lang, "btn_edit_job"))
+        self.btn_edit.clicked.connect(self.edit_job)
+        layout.addWidget(self.btn_edit, 5, 0)
+        
+        self.btn_delete = QPushButton(tr(parent.current_lang, "btn_delete_job"))
+        self.btn_delete.clicked.connect(self.delete_job)
+        layout.addWidget(self.btn_delete, 5, 1)
+
+        self.setLayout(layout)
+        self.load_jobs()
+        direction = self.parent.get_lang_dir(self.parent.current_lang)
+        self.setLayoutDirection(Qt.RightToLeft if direction == 'rtl' else Qt.LeftToRight)
+
+    def on_item_clicked(self, item):
+        row = item.row()
+        self.cron_input.setText(self.job_table.item(row, 1).text())
+        self.cmd_input.setText(self.job_table.item(row, 2).text())
+        status = self.job_table.item(row, 3).text()
+        self.chk_enabled.setChecked(status == tr(self.parent.current_lang, "status_enabled"))
+
+    def load_jobs(self):
+        self.job_table.setRowCount(0)
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT id, cron_expr, command, enabled FROM jobs")
+        for row_data in cur.fetchall():
+            row_num = self.job_table.rowCount()
+            self.job_table.insertRow(row_num)
+            for i, data in enumerate(row_data):
+                val = str(data)
+                if i == 3: val = tr(self.parent.current_lang, "status_enabled") if data == 1 else tr(self.parent.current_lang, "status_disabled")
+                self.job_table.setItem(row_num, i, QTableWidgetItem(val))
+        conn.close()
+        self.job_table.resizeColumnsToContents()
+
+    def add_job(self):
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("INSERT INTO jobs (cron_expr, command, enabled) VALUES (?, ?, ?)", 
+                    (self.cron_input.text(), self.cmd_input.text(), 1 if self.chk_enabled.isChecked() else 0))
+        conn.commit()
+        conn.close()
+        self.load_jobs()
+
+    def edit_job(self):
+        curr = self.job_table.currentRow()
+        if curr >= 0:
+            job_id = self.job_table.item(curr, 0).text()
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("UPDATE jobs SET cron_expr=?, command=?, enabled=? WHERE id=?", 
+                        (self.cron_input.text(), self.cmd_input.text(), 1 if self.chk_enabled.isChecked() else 0, job_id))
+            conn.commit()
+            conn.close()
+            self.load_jobs()
+
+    def delete_job(self):
+        curr = self.job_table.currentRow()
+        if curr >= 0:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Question)
+            msg.setWindowTitle(tr(self.parent.current_lang, "confirm_delete_title"))
+            msg.setText(tr(self.parent.current_lang, "confirm_delete_msg"))
+            btn_yes = msg.addButton(tr(self.parent.current_lang, "btn_yes"), QMessageBox.YesRole)
+            btn_no = msg.addButton(tr(self.parent.current_lang, "btn_no"), QMessageBox.NoRole)
+            msg.setDefaultButton(btn_no)
+            msg.exec_()
+            if msg.clickedButton() == btn_yes:
+                job_id = self.job_table.item(curr, 0).text()
+                conn = sqlite3.connect(DB_PATH)
+                cur = conn.cursor()
+                cur.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+                conn.commit()
+                conn.close()
+                self.load_jobs()
 
 class ControlPanel(QWidget):
     def __init__(self):
@@ -375,6 +547,14 @@ class ControlPanel(QWidget):
         self.btn_open_browser = QPushButton()
         self.btn_open_browser.clicked.connect(lambda: webbrowser.open("http://localhost/"))
 
+        # Tombol Port Settings
+        self.btn_settings = QPushButton()
+        self.btn_settings.clicked.connect(self.open_settings)
+
+        # Tombol Scheduler Settings
+        self.btn_scheduler_settings = QPushButton()
+        self.btn_scheduler_settings.clicked.connect(self.open_scheduler)
+
         # Tombol Minimize to Tray
         self.btn_minimize = QPushButton()
         self.btn_minimize.clicked.connect(self.hide_to_tray)
@@ -414,13 +594,6 @@ class ControlPanel(QWidget):
         self.btn_redis_external = QPushButton()
         self.btn_redis_external.clicked.connect(lambda: self.change_access("redis", True))
 
-        # Scheduler UI
-        self.scheduler_label = QLabel()
-        self.cron_input = QLineEdit("*/1 * * * *")
-        self.cmd_input = QLineEdit("")
-        self.btn_add_job = QPushButton()
-        self.btn_add_job.clicked.connect(self.add_job)
-
         # UI Logs
         self.log_label = QLabel()
         self.log_table = QTableWidget()
@@ -428,17 +601,7 @@ class ControlPanel(QWidget):
         self.btn_clear_logs = QPushButton()
         self.btn_clear_logs.clicked.connect(self.clear_logs)
 
-        # Tabel job & load data
-        self.job_table = QTableWidget()
-        self.job_table.setColumnCount(3)
-        self.load_jobs()
         self.load_logs()
-
-        # Tombol edit/hapus
-        self.btn_edit_job = QPushButton()
-        self.btn_edit_job.clicked.connect(self.edit_job)
-        self.btn_delete_job = QPushButton()
-        self.btn_delete_job.clicked.connect(self.delete_job)
 
         log_signal.updated.connect(self.load_logs)
 
@@ -447,8 +610,10 @@ class ControlPanel(QWidget):
         layout.setSpacing(10)
 
         # Baris 0: Bahasa & Browser
-        layout.addWidget(self.lang_selector, 0, 0, 1, 2)
-        layout.addWidget(self.btn_open_browser, 0, 2, 1, 2)
+        layout.addWidget(self.lang_selector, 0, 0, 1, 1)
+        layout.addWidget(self.btn_open_browser, 0, 1, 1, 1)
+        layout.addWidget(self.btn_scheduler_settings, 0, 2, 1, 1)
+        layout.addWidget(self.btn_settings, 0, 3, 1, 1)
         layout.addWidget(self.btn_minimize, 0, 4, 1, 1)
 
         # Baris 1: Apache (Status, Run, Stop, Local, External)
@@ -472,29 +637,14 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_redis_local, 3, 3)
         layout.addWidget(self.btn_redis_external, 3, 4)
 
-        # Baris 4: Scheduler Label
-        layout.addWidget(self.scheduler_label, 4, 0, 1, 5)
+        # Baris 4 dan 5: Global Settings
+        layout.addWidget(self.chk_run_startup, 4, 0, 1, 2)
+        layout.addWidget(self.chk_auto_start_services, 5, 0, 1, 2)
 
-        # Baris 5: Scheduler Inputs
-        layout.addWidget(self.cron_input, 5, 0, 1, 1)
-        layout.addWidget(self.cmd_input, 5, 1, 1, 3)
-        layout.addWidget(self.btn_add_job, 5, 4)
-
-        # Baris 6: Table (Span 5 columns)
-        layout.addWidget(self.job_table, 6, 0, 1, 5)
-
-        # Baris 7: Table Actions
-        layout.addWidget(self.btn_edit_job, 7, 3)
-        layout.addWidget(self.btn_delete_job, 7, 4)
-
-        # Baris 8 dan 9: Global Settings
-        layout.addWidget(self.chk_run_startup, 8, 0, 1, 2)
-        layout.addWidget(self.chk_auto_start_services, 9, 0, 1, 2)
-
-        # Baris 10-11: Logs
-        layout.addWidget(self.log_label, 10, 0, 1, 4)
-        layout.addWidget(self.btn_clear_logs, 10, 4)
-        layout.addWidget(self.log_table, 11, 0, 1, 5)
+        # Baris 6-7: Logs
+        layout.addWidget(self.log_label, 6, 0, 1, 4)
+        layout.addWidget(self.btn_clear_logs, 6, 4)
+        layout.addWidget(self.log_table, 7, 0, 1, 5)
 
         self.setLayout(layout)
 
@@ -538,12 +688,10 @@ class ControlPanel(QWidget):
         self.btn_redis_local.setText(tr(self.current_lang, "btn_redis_local"))
         self.btn_redis_external.setText(tr(self.current_lang, "btn_redis_external"))
 
-        self.scheduler_label.setText(tr(self.current_lang, "scheduler_label"))
-        self.btn_add_job.setText(tr(self.current_lang, "btn_add_job"))
-        self.btn_edit_job.setText(tr(self.current_lang, "btn_edit_job"))
-        self.btn_delete_job.setText(tr(self.current_lang, "btn_delete_job"))
         self.btn_open_browser.setText(tr(self.current_lang, "btn_open_browser"))
         self.btn_minimize.setText(tr(self.current_lang, "btn_minimize"))
+        self.btn_settings.setText(tr(self.current_lang, "btn_settings"))
+        self.btn_scheduler_settings.setText(tr(self.current_lang, "btn_manage_scheduler"))
 
         self.show_action.setText(tr(self.current_lang, "tray_menu_show"))
         self.minimize_action.setText(tr(self.current_lang, "tray_menu_minimize"))
@@ -559,13 +707,6 @@ class ControlPanel(QWidget):
 
         self.log_label.setText(tr(self.current_lang, "log_label"))
         self.btn_clear_logs.setText(tr(self.current_lang, "btn_clear_logs"))
-
-        # Update tabel header sesuai bahasa
-        self.job_table.setHorizontalHeaderLabels([
-            tr(self.current_lang, "col_id"),
-            tr(self.current_lang, "col_cron"),
-            tr(self.current_lang, "col_cmd")
-        ])
 
         self.log_table.setHorizontalHeaderLabels([
             tr(self.current_lang, "col_log_time"),
@@ -628,17 +769,20 @@ class ControlPanel(QWidget):
                 return tr(self.current_lang, f"{name}_status"), "color: red;"
 
         # Apache
-        text, style = get_status_info("apache", 80)
+        port_apache = int(get_setting('apache_port', '80'))
+        text, style = get_status_info("apache", port_apache)
         self.apache_status.setText(text)
         self.apache_status.setStyleSheet(style)
 
         # MySQL
-        text, style = get_status_info("mysql", 3306)
+        port_mysql = int(get_setting('mysql_port', '3306'))
+        text, style = get_status_info("mysql", port_mysql)
         self.mysql_status.setText(text)
         self.mysql_status.setStyleSheet(style)
 
         # Redis
-        text, style = get_status_info("redis", 6379)
+        port_redis = int(get_setting('redis_port', '6379'))
+        text, style = get_status_info("redis", port_redis)
         self.redis_status.setText(text)
         self.redis_status.setStyleSheet(style)
 
@@ -680,6 +824,22 @@ class ControlPanel(QWidget):
             set_setting('window_width', str(self.width()))
             set_setting('window_height', str(self.height()))
 
+    def open_settings(self):
+        dialog = SettingsDialog(self)
+        dialog.exec_()
+
+    def open_scheduler(self):
+        dialog = SchedulerDialog(self)
+        dialog.exec_()
+
+    def apply_port_settings(self):
+        prepare_environment()
+        # Re-apply current access modes with new ports
+        set_apache_access(get_setting('apache_access_mode', 'local') == 'external')
+        set_mysql_access(get_setting('mysql_access_mode', 'local') == 'external')
+        set_redis_access(get_setting('redis_access_mode', 'local') == 'external')
+        add_log("Settings updated and configurations regenerated.")
+
     def closeEvent(self, event):
         self.stop_all_services()
         QApplication.instance().quit()
@@ -720,7 +880,11 @@ class ControlPanel(QWidget):
         service_root = os.path.dirname(os.path.dirname(path))
         
         # Port Check
-        port_map = {"apache": 80, "mysql": 3306}
+        port_map = {
+            "apache": int(get_setting('apache_port', '80')),
+            "mysql": int(get_setting('mysql_port', '3306')),
+            "redis": int(get_setting('redis_port', '6379'))
+        }
         if name in port_map and is_port_in_use(port_map[name]):
             add_log(f"WARNING: Port {port_map[name]} already in use. {name} might fail to start.", "WARNING")
 
@@ -775,18 +939,6 @@ class ControlPanel(QWidget):
         setattr(self, f"{name}_proc", None)
         self.update_service_status()
 
-    def load_jobs(self):
-        self.job_table.setRowCount(0)
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM jobs")
-        for row_data in cur.fetchall():
-            row_num = self.job_table.rowCount()
-            self.job_table.insertRow(row_num)
-            for i, data in enumerate(row_data):
-                self.job_table.setItem(row_num, i, QTableWidgetItem(str(data)))
-        conn.close()
-
     def load_logs(self):
         self.log_table.setRowCount(0)
         conn = sqlite3.connect(DB_PATH)
@@ -808,49 +960,6 @@ class ControlPanel(QWidget):
         conn.commit()
         conn.close()
         self.load_logs()
-
-    def add_job(self):
-        cron, cmd = self.cron_input.text(), self.cmd_input.text()
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("INSERT INTO jobs (cron_expr, command) VALUES (?, ?)", (cron, cmd))
-        conn.commit()
-        conn.close()
-        self.load_jobs()
-
-    def edit_job(self):
-        curr = self.job_table.currentRow()
-        if curr >= 0:
-            job_id = self.job_table.item(curr, 0).text()
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute("UPDATE jobs SET cron_expr=?, command=? WHERE id=?", 
-                        (self.cron_input.text(), self.cmd_input.text(), job_id))
-            conn.commit()
-            conn.close()
-            self.load_jobs()
-
-    def delete_job(self):
-        curr = self.job_table.currentRow()
-        if curr >= 0:
-            msg = QMessageBox(self)
-            msg.setIcon(QMessageBox.Question)
-            msg.setWindowTitle(tr(self.current_lang, "confirm_delete_title"))
-            msg.setText(tr(self.current_lang, "confirm_delete_msg"))
-            
-            btn_yes = msg.addButton(tr(self.current_lang, "btn_yes"), QMessageBox.YesRole)
-            btn_no = msg.addButton(tr(self.current_lang, "btn_no"), QMessageBox.NoRole)
-            msg.setDefaultButton(btn_no)
-            msg.exec_()
-
-            if msg.clickedButton() == btn_yes:
-                job_id = self.job_table.item(curr, 0).text()
-                conn = sqlite3.connect(DB_PATH)
-                cur = conn.cursor()
-                cur.execute("DELETE FROM jobs WHERE id=?", (job_id,))
-                conn.commit()
-                conn.close()
-                self.load_jobs()
 
 if __name__ == "__main__":
     try:
