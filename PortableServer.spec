@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('icon.ico', '.'), ('show.png', '.'), ('start.png', '.'), ('stop.png', '.'), ('online.png', '.'), ('offline.png', '.'), ('exit.png', '.')],
+    datas=[('icon.ico', '.'), ('maximize.png', '.'), ('minimize.png', '.'), ('start.png', '.'), ('stop.png', '.'), ('online.png', '.'), ('offline.png', '.'), ('exit.png', '.')],
     hiddenimports=['croniter', 'dateutil'],
     hookspath=[],
     hooksconfig={},

@@ -20,7 +20,8 @@ python -m PyInstaller ^
   --hidden-import=croniter ^
   --hidden-import=dateutil ^
   --add-data "icon.ico;." ^
-  --add-data "show.png;." ^
+  --add-data "maximize.png;." ^
+  --add-data "minimize.png;." ^
   --add-data "start.png;." ^
   --add-data "stop.png;." ^
   --add-data "online.png;." ^

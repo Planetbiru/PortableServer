@@ -1,8 +1,9 @@
-import sys, os, subprocess, threading, time, sqlite3, configparser, webbrowser, ctypes
+import sys, os, subprocess, threading, time, sqlite3, configparser, webbrowser, ctypes, socket
+from PyQt5.QtCore import QTimer, QEvent, Qt
 from datetime import datetime
 from croniter import croniter
 from PyQt5.QtWidgets import (QApplication, QWidget, QPushButton, QLabel,
-                             QGridLayout, QLineEdit, QTableWidget, QTableWidgetItem,
+                             QGridLayout, QLineEdit, QTableWidget, QTableWidgetItem, QCheckBox,
                              QComboBox, QMessageBox,
                              QSystemTrayIcon, QMenu, QAction, QStyle)
 from PyQt5.QtGui import QIcon
@@ -27,6 +28,72 @@ REDIS_PATH = os.path.join(BASE_PATH, "redis", "redis-server.exe")
 config = configparser.ConfigParser()
 config.read(INI_PATH)
 
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
+def replace_and_write(template_name, target_path):
+    template_path = os.path.join(BASE_PATH, "config", template_name)
+    if not os.path.exists(template_path):
+        add_log(f"Template not found: {template_path}", "WARNING")
+        return
+    
+    try:
+        with open(template_path, "r") as f:
+            content = f.read()
+        
+        # Replace ${INSTALL_DIR} dengan BASE_PATH (menggunakan forward slash untuk config)
+        clean_base = BASE_PATH.replace("\\", "/")
+        content = content.replace("{ROOT}", clean_base)
+        content = content.replace("${INSTALL_DIR}", clean_base)
+        
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        with open(target_path, "w") as f:
+            f.write(content)
+        add_log(f"Generated config: {os.path.basename(target_path)}")
+    except Exception as e:
+        add_log(f"Error generating config {template_name}: {str(e)}", "ERROR")
+
+def prepare_environment():
+    add_log("Preparing environment directories and configs...")
+    # Create Directories
+    dirs = ["www", "tmp", "data", "data/mysql", "data/redis", "logs", "sessions", "apache/logs"]
+    for d in dirs:
+        os.makedirs(os.path.join(BASE_PATH, d), exist_ok=True)
+    
+    # Generate Configs from Templates
+    replace_and_write("httpd-template.conf", os.path.join(BASE_PATH, "config", "httpd.conf"))
+    replace_and_write("php-template.ini", os.path.join(BASE_PATH, "php", "php.ini"))
+    replace_and_write("my-template.ini", os.path.join(BASE_PATH, "config", "my.ini"))
+    replace_and_write("redis.windows-template.conf", os.path.join(BASE_PATH, "redis", "redis.windows.conf"))
+
+    # Update PATH for PHP
+    php_path = os.path.join(BASE_PATH, "php")
+    php_ext = os.path.join(BASE_PATH, "php", "ext")
+    env_path = os.environ.get("PATH", "")
+    if php_path not in env_path:
+        os.environ["PATH"] = f"{php_path}{os.pathsep}{php_ext}{os.pathsep}{env_path}"
+
+def set_run_on_startup(enabled):
+    if os.name != 'nt': return
+    import winreg
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    app_name = "PortableServerPanel"
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+        if enabled:
+            cmd = f'"{sys.executable}"' if getattr(sys, 'frozen', False) else f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+            winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, cmd)
+        else:
+            try:
+                winreg.DeleteValue(key, app_name)
+            except FileNotFoundError:
+                pass
+        winreg.CloseKey(key)
+    except Exception:
+        pass
+
 def get_languages():
     return config.sections()
 
@@ -48,8 +115,29 @@ def init_db():
         key TEXT PRIMARY KEY,
         value TEXT
     )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        level TEXT NOT NULL,
+        message TEXT NOT NULL
+    )""")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_minimized', '0')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('language', 'en')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('run_on_startup', '0')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_start_services', '0')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_width', '700')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_height', '600')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_maximized', '0')")
+    conn.commit()
+    conn.close()
+
+    prepare_environment()
+
+def add_log(message, level="INFO"):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute("INSERT INTO logs (timestamp, level, message) VALUES (?, ?, ?)", (ts, level, message))
     conn.commit()
     conn.close()
 
@@ -130,7 +218,17 @@ class ControlPanel(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Server Control Panel")
-        self.setGeometry(300, 300, 700, 600)
+        self.move(300, 300)
+        width = int(get_setting('window_width', '700'))
+        height = int(get_setting('window_height', '600'))
+        self.resize(width, height)
+
+        if get_setting('window_maximized', '0') == '1':
+            self.setWindowState(Qt.WindowMaximized)
+
+        self.resize_timer = QTimer()
+        self.resize_timer.setSingleShot(True)
+        self.resize_timer.timeout.connect(self.save_window_size)
 
         # Tambahkan padding horizontal agar caption tidak menyentuh tepi tombol
         self.setStyleSheet("""
@@ -141,8 +239,8 @@ class ControlPanel(QWidget):
             }
 
             QComboBox, QLineEdit {
-                padding-left: 5px;
-                padding-right: 5px;
+                padding-left: 8px;
+                padding-right: 8px;
                 min-height: 25px;
             }
         """)
@@ -156,16 +254,22 @@ class ControlPanel(QWidget):
 
         # System Tray Icon
 
-        show_path = os.path.join(BUNDLE_PATH, "show.png")
+        maximize_path = os.path.join(BUNDLE_PATH, "maximize.png")
         self.tray_icon = QSystemTrayIcon(self)
         if os.path.exists(icon_path):
             self.tray_icon.setIcon(QIcon(icon_path))
         
         self.tray_menu = QMenu()
         self.show_action = QAction("", self)
-        if os.path.exists(show_path):
-            self.show_action.setIcon(QIcon(show_path))
+        if os.path.exists(maximize_path):
+            self.show_action.setIcon(QIcon(maximize_path))
         self.show_action.triggered.connect(self.restore_from_tray)
+
+        minimize_path = os.path.join(BUNDLE_PATH, "minimize.png")
+        self.minimize_action = QAction("", self)
+        if os.path.exists(minimize_path):
+            self.minimize_action.setIcon(QIcon(minimize_path))
+        self.minimize_action.triggered.connect(self.hide_to_tray)
 
         # Actions for All Services
         self.start_all_action = QAction("", self)
@@ -198,6 +302,7 @@ class ControlPanel(QWidget):
         self.exit_action.triggered.connect(QApplication.instance().quit)
         
         self.tray_menu.addAction(self.show_action)
+        self.tray_menu.addAction(self.minimize_action)
         self.tray_menu.addSeparator()
         self.tray_menu.addAction(self.start_all_action)
         self.tray_menu.addAction(self.stop_all_action)
@@ -221,6 +326,15 @@ class ControlPanel(QWidget):
         if index >= 0: self.lang_selector.setCurrentIndex(index)
         
         self.lang_selector.currentIndexChanged.connect(self.change_language)
+
+        # Checkboxes Settings
+        self.chk_run_startup = QCheckBox()
+        self.chk_run_startup.setChecked(get_setting('run_on_startup', '0') == '1')
+        self.chk_run_startup.stateChanged.connect(self.toggle_startup)
+
+        self.chk_auto_start_services = QCheckBox()
+        self.chk_auto_start_services.setChecked(get_setting('auto_start_services', '0') == '1')
+        self.chk_auto_start_services.stateChanged.connect(self.toggle_auto_start)
 
         # Tombol Buka Browser
         self.btn_open_browser = QPushButton()
@@ -272,10 +386,18 @@ class ControlPanel(QWidget):
         self.btn_add_job = QPushButton()
         self.btn_add_job.clicked.connect(self.add_job)
 
-        # Tabel job
+        # UI Logs
+        self.log_label = QLabel()
+        self.log_table = QTableWidget()
+        self.log_table.setColumnCount(3)
+        self.btn_clear_logs = QPushButton()
+        self.btn_clear_logs.clicked.connect(self.clear_logs)
+
+        # Tabel job & load data
         self.job_table = QTableWidget()
         self.job_table.setColumnCount(3)
         self.load_jobs()
+        self.load_logs()
 
         # Tombol edit/hapus
         self.btn_edit_job = QPushButton()
@@ -328,6 +450,15 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_edit_job, 7, 0, 1, 3)
         layout.addWidget(self.btn_delete_job, 7, 3, 1, 2)
 
+        # Baris 8: Global Settings
+        layout.addWidget(self.chk_run_startup, 8, 0, 1, 2)
+        layout.addWidget(self.chk_auto_start_services, 8, 2, 1, 3)
+
+        # Baris 9-10: Logs
+        layout.addWidget(self.log_label, 9, 0, 1, 4)
+        layout.addWidget(self.btn_clear_logs, 9, 4)
+        layout.addWidget(self.log_table, 10, 0, 1, 5)
+
         self.setLayout(layout)
 
         # Simpan proses manual
@@ -364,12 +495,19 @@ class ControlPanel(QWidget):
         self.btn_minimize.setText(tr(self.current_lang, "btn_minimize"))
 
         self.show_action.setText(tr(self.current_lang, "tray_menu_show"))
+        self.minimize_action.setText(tr(self.current_lang, "tray_menu_minimize"))
         self.exit_action.setText(tr(self.current_lang, "tray_menu_exit"))
         
         self.start_all_action.setText(tr(self.current_lang, "tray_start_all"))
         self.stop_all_action.setText(tr(self.current_lang, "tray_stop_all"))
         self.online_all_action.setText(tr(self.current_lang, "tray_online_all"))
         self.offline_all_action.setText(tr(self.current_lang, "tray_offline_all"))
+
+        self.chk_run_startup.setText(tr(self.current_lang, "chk_run_startup"))
+        self.chk_auto_start_services.setText(tr(self.current_lang, "chk_auto_start_services"))
+
+        self.log_label.setText(tr(self.current_lang, "log_label"))
+        self.btn_clear_logs.setText(tr(self.current_lang, "btn_clear_logs"))
 
         # Update tabel header sesuai bahasa
         self.job_table.setHorizontalHeaderLabels([
@@ -378,12 +516,28 @@ class ControlPanel(QWidget):
             tr(self.current_lang, "col_cmd")
         ])
 
+        self.log_table.setHorizontalHeaderLabels([
+            tr(self.current_lang, "col_log_time"),
+            tr(self.current_lang, "col_log_level"),
+            tr(self.current_lang, "col_log_msg")
+        ])
+        self.log_table.resizeColumnsToContents()
+
     def change_language(self, index):
         code = self.lang_selector.itemData(index)
         if code:
             self.current_lang = code
             set_setting('language', code)
             self.update_texts()
+
+    def toggle_startup(self, state):
+        enabled = (state == 2) # Qt.Checked
+        set_setting('run_on_startup', '1' if enabled else '0')
+        set_run_on_startup(enabled)
+
+    def toggle_auto_start(self, state):
+        enabled = (state == 2)
+        set_setting('auto_start_services', '1' if enabled else '0')
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.Trigger:
@@ -397,6 +551,22 @@ class ControlPanel(QWidget):
         set_setting('start_minimized', '0')
         self.showNormal()
         self.activateWindow()
+
+    def resizeEvent(self, event):
+        if not self.isMinimized():
+            self.resize_timer.start(500)  # Simpan 500ms setelah resize berhenti
+        super().resizeEvent(event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.WindowStateChange:
+            is_max = self.isMaximized()
+            set_setting('window_maximized', '1' if is_max else '0')
+        super().changeEvent(event)
+
+    def save_window_size(self):
+        if not self.isMinimized() and not self.isMaximized():
+            set_setting('window_width', str(self.width()))
+            set_setting('window_height', str(self.height()))
 
     def closeEvent(self, event):
         QApplication.instance().quit()
@@ -421,17 +591,63 @@ class ControlPanel(QWidget):
         set_redis_access(False)
 
     def run_service(self, name, path):
-        if not os.path.exists(path): return
-        proc = subprocess.Popen([path], creationflags=subprocess.CREATE_NO_WINDOW)
-        if name == "apache": self.apache_proc = proc
-        elif name == "mysql": self.mysql_proc = proc
-        elif name == "redis": self.redis_proc = proc
+        service_root = os.path.dirname(os.path.dirname(path))
+        
+        # Port Check
+        port_map = {"apache": 80, "mysql": 3306}
+        if name in port_map and is_port_in_use(port_map[name]):
+            add_log(f"WARNING: Port {port_map[name]} already in use. {name} might fail to start.", "WARNING")
+
+        if not os.path.exists(path):
+            add_log(f"FAILED: Path not found - {path}", "ERROR")
+            self.load_logs()
+            return
+
+        try:
+            args = [path]
+            if name == "apache":
+                conf = os.path.join(BASE_PATH, "config", "httpd.conf")
+                args.extend(["-f", conf])
+            elif name == "mysql":
+                conf = os.path.join(BASE_PATH, "config", "my.ini")
+                args.append(f"--defaults-file={conf}")
+            elif name == "redis":
+                conf = os.path.join(BASE_PATH, "redis", "redis.windows.conf")
+                if os.path.exists(conf):
+                    args.append(conf)
+
+            add_log(f"Starting {name}: {' '.join(args)}")
+            proc = subprocess.Popen(args, cwd=service_root, creationflags=subprocess.CREATE_NO_WINDOW)
+            
+            if name == "apache": self.apache_proc = proc
+            elif name == "mysql": self.mysql_proc = proc
+            elif name == "redis": self.redis_proc = proc
+            add_log(f"SUCCESS: {name} started (PID: {proc.pid})")
+        except Exception as e:
+            add_log(f"FAILED to start {name}: {str(e)}", "ERROR")
+        self.load_logs()
 
     def stop_service(self, name):
-        proc = getattr(self, f"{name}_proc", None)
-        if proc:
-            proc.terminate()
-            setattr(self, f"{name}_proc", None)
+        add_log(f"Stopping service: {name}")
+        
+        # Mapping nama layanan ke nama file eksekutabel sesuai stop.php
+        exe_map = {
+            "apache": "httpd.exe",
+            "mysql": "mysqld.exe",
+            "redis": "redis-server.exe"
+        }
+        
+        exe_name = exe_map.get(name)
+        if exe_name:
+            # Menggunakan taskkill /F /IM untuk menghentikan proses secara paksa
+            # seperti pada logika stop.php
+            subprocess.run(["taskkill", "/F", "/IM", exe_name], 
+                           stdout=subprocess.DEVNULL, 
+                           stderr=subprocess.DEVNULL,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+            add_log(f"Command sent to stop {exe_name}")
+
+        setattr(self, f"{name}_proc", None)
 
     def load_jobs(self):
         self.job_table.setRowCount(0)
@@ -444,6 +660,28 @@ class ControlPanel(QWidget):
             for i, data in enumerate(row_data):
                 self.job_table.setItem(row_num, i, QTableWidgetItem(str(data)))
         conn.close()
+
+    def load_logs(self):
+        self.log_table.setRowCount(0)
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        # Tampilkan log terbaru di paling atas
+        cur.execute("SELECT timestamp, level, message FROM logs ORDER BY id DESC LIMIT 100")
+        for row_data in cur.fetchall():
+            row_num = self.log_table.rowCount()
+            self.log_table.insertRow(row_num)
+            for i, data in enumerate(row_data):
+                self.log_table.setItem(row_num, i, QTableWidgetItem(str(data)))
+        conn.close()
+        self.log_table.resizeColumnsToContents()
+
+    def clear_logs(self):
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM logs")
+        conn.commit()
+        conn.close()
+        self.load_logs()
 
     def add_job(self):
         cron, cmd = self.cron_input.text(), self.cmd_input.text()
@@ -512,6 +750,8 @@ if __name__ == "__main__":
         threading.Thread(target=scheduler_loop, daemon=True).start()
         
         window = ControlPanel()
+        if get_setting('auto_start_services', '0') == '1':
+            window.start_all_services()
         if get_setting('start_minimized', '0') == '0':
             window.show()
             
