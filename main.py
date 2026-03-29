@@ -134,6 +134,9 @@ def init_db():
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_width', '700')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_height', '600')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_maximized', '0')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_access_mode', 'local')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_access_mode', 'local')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_access_mode', 'local')")
     conn.commit()
     conn.close()
 
@@ -196,6 +199,7 @@ def set_apache_access(external=False):
                     f.write("Listen 0.0.0.0:80\n" if external else "Listen 127.0.0.1:80\n")
                 else:
                     f.write(line)
+        set_setting('apache_access_mode', 'external' if external else 'local')
         add_log(f"Apache access mode changed to {'Online' if external else 'Offline'}")
 
 def set_mysql_access(external=False):
@@ -224,6 +228,7 @@ def set_mysql_access(external=False):
                     found = True
             new_lines = final_lines if found else new_lines + [f"\n[mysqld]\nbind-address={new_val}\n"]
 
+        set_setting('mysql_access_mode', 'external' if external else 'local')
         with open(conf_path, "w", encoding='utf-8') as f:
             f.writelines(new_lines)
         add_log(f"MariaDB access mode changed to {'Online' if external else 'Offline'}")
@@ -239,6 +244,7 @@ def set_redis_access(external=False):
                     f.write("bind 0.0.0.0\n" if external else "bind 127.0.0.1\n")
                 else:
                     f.write(line)
+        set_setting('redis_access_mode', 'external' if external else 'local')
         add_log(f"Redis access mode changed to {'Online' if external else 'Offline'}")
 
 class ControlPanel(QWidget):
@@ -679,8 +685,19 @@ class ControlPanel(QWidget):
         QApplication.instance().quit()
 
     def start_all_services(self):
+        # Apache
+        apache_mode = get_setting('apache_access_mode', 'local') == 'external'
+        set_apache_access(apache_mode)
         self.run_service("apache", APACHE_PATH)
+
+        # MySQL
+        mysql_mode = get_setting('mysql_access_mode', 'local') == 'external'
+        set_mysql_access(mysql_mode)
         self.run_service("mysql", MYSQL_PATH)
+
+        # Redis
+        redis_mode = get_setting('redis_access_mode', 'local') == 'external'
+        set_redis_access(redis_mode)
         self.run_service("redis", REDIS_PATH)
 
     def stop_all_services(self):
