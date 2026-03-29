@@ -117,6 +117,12 @@ class ControlPanel(QWidget):
                 padding-right: 15px;
                 min-height: 25px;
             }
+
+            QComboBox, QLineEdit {
+                padding-left: 5px;
+                padding-right: 5px;
+                min-height: 25px;
+            }
         """)
 
         # Set Window Icon
@@ -180,7 +186,7 @@ class ControlPanel(QWidget):
         # Scheduler UI
         self.scheduler_label = QLabel()
         self.cron_input = QLineEdit("*/1 * * * *")
-        self.cmd_input = QLineEdit("echo Hello World")
+        self.cmd_input = QLineEdit("")
         self.btn_add_job = QPushButton()
         self.btn_add_job.clicked.connect(self.add_job)
 
