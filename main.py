@@ -3,7 +3,8 @@ from datetime import datetime
 from croniter import croniter
 from PyQt5.QtWidgets import (QApplication, QWidget, QPushButton, QLabel,
                              QGridLayout, QLineEdit, QTableWidget, QTableWidgetItem,
-                             QHBoxLayout, QComboBox, QVBoxLayout, QMessageBox)
+                             QComboBox, QMessageBox,
+                             QSystemTrayIcon, QMenu, QAction, QStyle)
 from PyQt5.QtGui import QIcon
 
 if getattr(sys, 'frozen', False):
@@ -43,6 +44,27 @@ def init_db():
         cron_expr TEXT NOT NULL,
         command TEXT NOT NULL
     )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )""")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_minimized', '0')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('language', 'en')")
+    conn.commit()
+    conn.close()
+
+def get_setting(key, default='0'):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else default
+
+def set_setting(key, value):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
     conn.close()
 
@@ -130,7 +152,63 @@ class ControlPanel(QWidget):
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
-        self.current_lang = "en"
+        self.current_lang = get_setting('language', 'en')
+
+        # System Tray Icon
+
+        show_path = os.path.join(BUNDLE_PATH, "show.png")
+        self.tray_icon = QSystemTrayIcon(self)
+        if os.path.exists(icon_path):
+            self.tray_icon.setIcon(QIcon(icon_path))
+        
+        self.tray_menu = QMenu()
+        self.show_action = QAction("", self)
+        if os.path.exists(show_path):
+            self.show_action.setIcon(QIcon(show_path))
+        self.show_action.triggered.connect(self.restore_from_tray)
+
+        # Actions for All Services
+        self.start_all_action = QAction("", self)
+        start_icon = os.path.join(BUNDLE_PATH, "start.png")
+        self.start_all_action.setIcon(QIcon(start_icon) if os.path.exists(start_icon) else self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.start_all_action.triggered.connect(self.start_all_services)
+
+        self.stop_all_action = QAction("", self)
+        stop_icon = os.path.join(BUNDLE_PATH, "stop.png")
+        self.stop_all_action.setIcon(QIcon(stop_icon) if os.path.exists(stop_icon) else self.style().standardIcon(QStyle.SP_MediaStop))
+        self.stop_all_action.triggered.connect(self.stop_all_services)
+
+        self.online_all_action = QAction("", self)
+        online_icon = os.path.join(BUNDLE_PATH, "online.png")
+        self.online_all_action.setIcon(QIcon(online_icon) if os.path.exists(online_icon) else self.style().standardIcon(QStyle.SP_DriveNetIcon))
+        self.online_all_action.triggered.connect(self.set_all_online)
+
+        self.offline_all_action = QAction("", self)
+        offline_icon = os.path.join(BUNDLE_PATH, "offline.png")
+        self.offline_all_action.setIcon(QIcon(offline_icon) if os.path.exists(offline_icon) else self.style().standardIcon(QStyle.SP_DriveHDIcon))
+        self.offline_all_action.triggered.connect(self.set_all_offline)
+
+        self.exit_action = QAction("", self)
+        # Gunakan exit.png jika tersedia, jika tidak gunakan icon standar sistem
+        exit_icon_path = os.path.join(BUNDLE_PATH, "exit.png")
+        if os.path.exists(exit_icon_path):
+            self.exit_action.setIcon(QIcon(exit_icon_path))
+        else:
+            self.exit_action.setIcon(self.style().standardIcon(QStyle.SP_DialogCloseButton))
+        self.exit_action.triggered.connect(QApplication.instance().quit)
+        
+        self.tray_menu.addAction(self.show_action)
+        self.tray_menu.addSeparator()
+        self.tray_menu.addAction(self.start_all_action)
+        self.tray_menu.addAction(self.stop_all_action)
+        self.tray_menu.addSeparator()
+        self.tray_menu.addAction(self.online_all_action)
+        self.tray_menu.addAction(self.offline_all_action)
+        self.tray_menu.addSeparator()
+        self.tray_menu.addAction(self.exit_action)
+        self.tray_icon.setContextMenu(self.tray_menu)
+        self.tray_icon.activated.connect(self.on_tray_activated)
+        self.tray_icon.show()
 
         # Dropdown bahasa
         self.lang_selector = QComboBox()
@@ -147,6 +225,10 @@ class ControlPanel(QWidget):
         # Tombol Buka Browser
         self.btn_open_browser = QPushButton()
         self.btn_open_browser.clicked.connect(lambda: webbrowser.open("http://localhost/"))
+
+        # Tombol Minimize to Tray
+        self.btn_minimize = QPushButton()
+        self.btn_minimize.clicked.connect(self.hide_to_tray)
 
         # Status labels
         self.apache_status = QLabel()
@@ -206,8 +288,9 @@ class ControlPanel(QWidget):
         layout.setSpacing(10)
 
         # Baris 0: Bahasa & Browser
-        layout.addWidget(self.lang_selector, 0, 0, 1, 3)
-        layout.addWidget(self.btn_open_browser, 0, 3, 1, 2)
+        layout.addWidget(self.lang_selector, 0, 0, 1, 2)
+        layout.addWidget(self.btn_open_browser, 0, 2, 1, 2)
+        layout.addWidget(self.btn_minimize, 0, 4, 1, 1)
 
         # Baris 1: Apache (Status, Run, Stop, Local, External)
         layout.addWidget(self.apache_status, 1, 0)
@@ -278,6 +361,15 @@ class ControlPanel(QWidget):
         self.btn_edit_job.setText(tr(self.current_lang, "btn_edit_job"))
         self.btn_delete_job.setText(tr(self.current_lang, "btn_delete_job"))
         self.btn_open_browser.setText(tr(self.current_lang, "btn_open_browser"))
+        self.btn_minimize.setText(tr(self.current_lang, "btn_minimize"))
+
+        self.show_action.setText(tr(self.current_lang, "tray_menu_show"))
+        self.exit_action.setText(tr(self.current_lang, "tray_menu_exit"))
+        
+        self.start_all_action.setText(tr(self.current_lang, "tray_start_all"))
+        self.stop_all_action.setText(tr(self.current_lang, "tray_stop_all"))
+        self.online_all_action.setText(tr(self.current_lang, "tray_online_all"))
+        self.offline_all_action.setText(tr(self.current_lang, "tray_offline_all"))
 
         # Update tabel header sesuai bahasa
         self.job_table.setHorizontalHeaderLabels([
@@ -290,7 +382,43 @@ class ControlPanel(QWidget):
         code = self.lang_selector.itemData(index)
         if code:
             self.current_lang = code
+            set_setting('language', code)
             self.update_texts()
+
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.Trigger:
+            self.restore_from_tray()
+
+    def hide_to_tray(self):
+        set_setting('start_minimized', '1')
+        self.hide()
+
+    def restore_from_tray(self):
+        set_setting('start_minimized', '0')
+        self.showNormal()
+        self.activateWindow()
+
+    def closeEvent(self, event):
+        QApplication.instance().quit()
+
+    def start_all_services(self):
+        self.run_service("apache", APACHE_PATH)
+        self.run_service("mysql", MYSQL_PATH)
+        self.run_service("redis", REDIS_PATH)
+
+    def stop_all_services(self):
+        for svc in ["apache", "mysql", "redis"]:
+            self.stop_service(svc)
+
+    def set_all_online(self):
+        set_apache_access(True)
+        set_mysql_access(True)
+        set_redis_access(True)
+
+    def set_all_offline(self):
+        set_apache_access(False)
+        set_mysql_access(False)
+        set_redis_access(False)
 
     def run_service(self, name, path):
         if not os.path.exists(path): return
@@ -366,16 +494,37 @@ if __name__ == "__main__":
         if os.name == 'nt':
             myappid = 'kamshory.portableserver.panel.1.0'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-            
+
         app = QApplication(sys.argv)
         init_db()
+        lang = get_setting('language', 'en')
+
+        if os.name == 'nt':
+            # Single instance check menggunakan Mutex
+            # Simpan handle dalam variabel 'instance_mutex' agar tidak terhapus oleh garbage collector
+            instance_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\PortableServerControlPanelMutex")
+            if ctypes.windll.kernel32.GetLastError() == 183: # 183 = ERROR_ALREADY_EXISTS
+                QMessageBox.information(None, tr(lang, "app_running_title"), tr(lang, "app_running_msg"))
+                sys.exit(0)
+
+        app.setQuitOnLastWindowClosed(False)
         # Menjalankan scheduler di thread terpisah
         threading.Thread(target=scheduler_loop, daemon=True).start()
         
         window = ControlPanel()
-        window.show()
+        if get_setting('start_minimized', '0') == '0':
+            window.show()
+            
         sys.exit(app.exec_())
     except Exception as e:
-        error_app = QApplication(sys.argv)
-        QMessageBox.critical(None, "Fatal Error", f"Aplikasi gagal dimulai:\n{str(e)}")
+        # Jika error terjadi sebelum database siap, gunakan default 'en'
+        try:
+            lang = get_setting('language', 'en')
+        except:
+            lang = 'en'
+            
+        if 'app' not in locals():
+            error_app = QApplication(sys.argv)
+            
+        QMessageBox.critical(None, tr(lang, "fatal_error_title"), f"{tr(lang, 'fatal_error_msg')}\n{str(e)}")
         sys.exit(1)
