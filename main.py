@@ -143,9 +143,9 @@ def init_db():
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_width', '700')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_height', '600')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_maximized', '0')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_access_mode', 'local')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_access_mode', 'local')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_access_mode', 'local')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_access_mode', 'external')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_access_mode', 'external')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_access_mode', 'external')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_port', '80')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_port', '3306')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_port', '6379')")
@@ -153,6 +153,10 @@ def init_db():
     conn.close()
 
     prepare_environment()
+    # Pastikan file konfigurasi sinkron dengan pengaturan database saat startup
+    set_apache_access(get_setting('apache_access_mode', 'local') == 'external', force=True)
+    set_mysql_access(get_setting('mysql_access_mode', 'local') == 'external', force=True)
+    set_redis_access(get_setting('redis_access_mode', 'local') == 'external', force=True)
 
 def add_log(message, level="INFO"):
     conn = sqlite3.connect(DB_PATH)
@@ -200,7 +204,10 @@ def scheduler_loop():
         time.sleep(30)
 
 # --- Access control (edit config files) ---
-def set_apache_access(external=False):
+def set_apache_access(external=False, force=False):
+    new_mode = 'external' if external else 'local'
+    if not force and get_setting('apache_access_mode') == new_mode:
+        return
     conf_path = os.path.join(BASE_PATH, "config", "httpd.conf")
     port = get_setting('apache_port', '80')
     if os.path.exists(conf_path):
@@ -212,10 +219,13 @@ def set_apache_access(external=False):
                     f.write(f"Listen 0.0.0.0:{port}\n" if external else f"Listen 127.0.0.1:{port}\n")
                 else:
                     f.write(line)
-        set_setting('apache_access_mode', 'external' if external else 'local')
+        set_setting('apache_access_mode', new_mode)
         add_log(f"Apache access mode changed to {'Online' if external else 'Offline'}")
 
-def set_mysql_access(external=False):
+def set_mysql_access(external=False, force=False):
+    new_mode = 'external' if external else 'local'
+    if not force and get_setting('mysql_access_mode') == new_mode:
+        return
     conf_path = os.path.join(BASE_PATH, "config", "my.ini")
     port = get_setting('mysql_port', '3306')
     if os.path.exists(conf_path):
@@ -244,12 +254,15 @@ def set_mysql_access(external=False):
                     found = True
             new_lines = final_lines if found else new_lines + [f"\n[mysqld]\nbind-address={new_val}\n"]
 
-        set_setting('mysql_access_mode', 'external' if external else 'local')
+        set_setting('mysql_access_mode', new_mode)
         with open(conf_path, "w", encoding='utf-8') as f:
             f.writelines(new_lines)
         add_log(f"MariaDB access mode changed to {'Online' if external else 'Offline'}")
 
-def set_redis_access(external=False):
+def set_redis_access(external=False, force=False):
+    new_mode = 'external' if external else 'local'
+    if not force and get_setting('redis_access_mode') == new_mode:
+        return
     conf_path = os.path.join(BASE_PATH, "redis", "redis.windows.conf")
     port = get_setting('redis_port', '6379')
     if os.path.exists(conf_path):
@@ -263,7 +276,7 @@ def set_redis_access(external=False):
                     f.write(f"port {port}\n")
                 else:
                     f.write(line)
-        set_setting('redis_access_mode', 'external' if external else 'local')
+        set_setting('redis_access_mode', new_mode)
         add_log(f"Redis access mode changed to {'Online' if external else 'Offline'}")
 
 class SettingsDialog(QDialog):
@@ -835,9 +848,9 @@ class ControlPanel(QWidget):
     def apply_port_settings(self):
         prepare_environment()
         # Re-apply current access modes with new ports
-        set_apache_access(get_setting('apache_access_mode', 'local') == 'external')
-        set_mysql_access(get_setting('mysql_access_mode', 'local') == 'external')
-        set_redis_access(get_setting('redis_access_mode', 'local') == 'external')
+        set_apache_access(get_setting('apache_access_mode', 'local') == 'external', force=True)
+        set_mysql_access(get_setting('mysql_access_mode', 'local') == 'external', force=True)
+        set_redis_access(get_setting('redis_access_mode', 'local') == 'external', force=True)
         add_log("Settings updated and configurations regenerated.")
 
     def closeEvent(self, event):
