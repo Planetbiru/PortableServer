@@ -185,7 +185,6 @@ def set_setting(key, value):
 
 # --- Scheduler thread ---
 def scheduler_loop():
-    add_log("Scheduler thread started.")
     while True:
         # Sinkronisasi: Tunggu hingga detik 00 pada menit berikutnya berdasarkan system clock
         now_ts = time.time()
@@ -516,7 +515,7 @@ class MariaDBPasswordDialog(QDialog):
 
         # 2. Validasi Dasar
         if not new_pass:
-            QMessageBox.warning(self, tr(lang, "error_title"), "Password baru tidak boleh kosong.")
+            QMessageBox.warning(self, tr(lang, "error_title"), tr(lang, "msg_new_password_can_not_be_empty"))
             return
 
         if new_pass != repeat_pass:
