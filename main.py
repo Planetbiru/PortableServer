@@ -1,10 +1,10 @@
-import sys, os, subprocess, threading, time, sqlite3, configparser, webbrowser, ctypes, socket
+import sys, os, subprocess, threading, time, sqlite3, configparser, webbrowser, ctypes, socket, hashlib, textwrap
 from PyQt5.QtCore import QTimer, QEvent, Qt, pyqtSignal, QObject
 from datetime import datetime
 from croniter import croniter
 from PyQt5.QtWidgets import (QApplication, QWidget, QPushButton, QLabel,
                              QGridLayout, QLineEdit, QTableWidget, QTableWidgetItem, QCheckBox,
-                             QComboBox, QMessageBox,
+                             QComboBox, QMessageBox, QInputDialog,
                              QSystemTrayIcon, QMenu, QAction, QStyle, QDialog, QHBoxLayout)
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
@@ -527,6 +527,35 @@ class MariaDBPasswordDialog(QDialog):
         escaped_pass = new_pass.replace("'", "''")
 
         if force:
+            # Security Check for Force Reset
+            admin_hash = get_setting('admin_password_hash', '')
+            
+            if not admin_hash:
+                # Setup new admin password if not exists
+                msg = textwrap.fill(tr(lang, "msg_setup_admin_pass"), width=55)
+                ans, ok = QInputDialog.getText(self, tr(lang, "lbl_admin_password_setup"), 
+                                              msg, QLineEdit.Password)
+                if ok and ans:
+                    hashed = hashlib.sha256(ans.encode()).hexdigest()
+                    set_setting('admin_password_hash', hashed)
+                    QMessageBox.information(self, tr(lang, "success_title"), tr(lang, "msg_admin_password_created"))
+                else:
+                    # User cancelled or empty
+                    if ok: QMessageBox.warning(self, tr(lang, "error_title"), tr(lang, "msg_new_password_can_not_be_empty"))
+                    return
+            else:
+                # Verify existing admin password
+                msg = textwrap.fill(tr(lang, "msg_enter_admin_pass"), width=55)
+                ans, ok = QInputDialog.getText(self, tr(lang, "lbl_admin_password_verify"), 
+                                              msg, QLineEdit.Password)
+                if ok:
+                    input_hash = hashlib.sha256(ans.encode()).hexdigest()
+                    if input_hash != admin_hash:
+                        QMessageBox.warning(self, tr(lang, "error_title"), tr(lang, "msg_admin_pass_wrong"))
+                        return
+                else:
+                    return
+
             self.parent.stop_service("mysql")
             time.sleep(1)
             
@@ -726,6 +755,9 @@ class ControlPanel(QWidget):
 
         # Individual Service Menus in Tray (Toggle Support)
         self.apache_tray_menu = self.tray_menu.addMenu("Apache")
+        apache_icon_path = os.path.join(BUNDLE_PATH, "apache.png")
+        if os.path.exists(apache_icon_path):
+            self.apache_tray_menu.setIcon(QIcon(apache_icon_path))
         self.apache_tray_run = QAction("", self)
         self.apache_tray_run.triggered.connect(lambda: self.toggle_service_action("apache", APACHE_PATH))
         self.apache_tray_access = QAction("", self)
@@ -734,6 +766,9 @@ class ControlPanel(QWidget):
         self.apache_tray_menu.addAction(self.apache_tray_access)
 
         self.mysql_tray_menu = self.tray_menu.addMenu("MariaDB")
+        mariadb_icon_path = os.path.join(BUNDLE_PATH, "mariadb.png")
+        if os.path.exists(mariadb_icon_path):
+            self.mysql_tray_menu.setIcon(QIcon(mariadb_icon_path))
         self.mysql_tray_run = QAction("", self)
         self.mysql_tray_run.triggered.connect(lambda: self.toggle_service_action("mysql", MYSQL_PATH))
         self.mysql_tray_access = QAction("", self)
@@ -742,6 +777,9 @@ class ControlPanel(QWidget):
         self.mysql_tray_menu.addAction(self.mysql_tray_access)
 
         self.redis_tray_menu = self.tray_menu.addMenu("Redis")
+        redis_icon_path = os.path.join(BUNDLE_PATH, "redis.png")
+        if os.path.exists(redis_icon_path):
+            self.redis_tray_menu.setIcon(QIcon(redis_icon_path))
         self.redis_tray_run = QAction("", self)
         self.redis_tray_run.triggered.connect(lambda: self.toggle_service_action("redis", REDIS_PATH))
         self.redis_tray_access = QAction("", self)
@@ -1055,14 +1093,32 @@ class ControlPanel(QWidget):
         run_key = f"btn_{name}_stop" if is_running else f"btn_{name}_run"
         run_text = tr(lang, run_key)
         getattr(self, f"btn_{name}_toggle").setText(run_text)
-        getattr(self, f"{name}_tray_run").setText(run_text)
+        
+        tray_run = getattr(self, f"{name}_tray_run")
+        tray_run.setText(run_text)
+        run_icon = "stop.png" if is_running else "start.png"
+        run_icon_path = os.path.join(BUNDLE_PATH, run_icon)
+        if os.path.exists(run_icon_path):
+            tray_run.setIcon(QIcon(run_icon_path))
+        else:
+            std_icon = QStyle.SP_MediaStop if is_running else QStyle.SP_MediaPlay
+            tray_run.setIcon(self.style().standardIcon(std_icon))
 
         # 3. Update Tombol Mode Akses (Berbasis Status - Sesuai Permintaan)
         # Jika online, tampilkan "Public Mode". Jika offline, tampilkan "Local Mode".
         mode_key = f"btn_{name}_external" if is_online else f"btn_{name}_local"
         mode_text = tr(lang, mode_key)
         getattr(self, f"btn_{name}_access_toggle").setText(mode_text)
-        getattr(self, f"{name}_tray_access").setText(mode_text)
+        
+        tray_access = getattr(self, f"{name}_tray_access")
+        tray_access.setText(mode_text)
+        acc_icon = "online.png" if is_online else "offline.png"
+        acc_icon_path = os.path.join(BUNDLE_PATH, acc_icon)
+        if os.path.exists(acc_icon_path):
+            tray_access.setIcon(QIcon(acc_icon_path))
+        else:
+            std_icon = QStyle.SP_DriveNetIcon if is_online else QStyle.SP_DriveHDIcon
+            tray_access.setIcon(self.style().standardIcon(std_icon))
 
         # 4. Update Label Status Utama (Berbasis Status)
         status_label = getattr(self, f"{name}_status")

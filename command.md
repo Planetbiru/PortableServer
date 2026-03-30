@@ -26,6 +26,9 @@ python -m PyInstaller ^
   --add-data "stop.png;." ^
   --add-data "online.png;." ^
   --add-data "offline.png;." ^
+  --add-data "apache.png;." ^
+  --add-data "mariadb.png;." ^
+  --add-data "redis.png;." ^
   --add-data "exit.png;." ^
   --exclude-module numpy --exclude-module pandas --exclude-module matplotlib ^
   main.py
