@@ -740,12 +740,12 @@ class ControlPanel(QWidget):
         self.stop_all_action.triggered.connect(self.stop_all_services)
 
         self.online_all_action = QAction("", self)
-        online_icon = os.path.join(BUNDLE_PATH, "online.png")
+        online_icon = os.path.join(BUNDLE_PATH, "public.png")
         self.online_all_action.setIcon(QIcon(online_icon) if os.path.exists(online_icon) else self.style().standardIcon(QStyle.SP_DriveNetIcon))
         self.online_all_action.triggered.connect(self.set_all_online)
 
         self.offline_all_action = QAction("", self)
-        offline_icon = os.path.join(BUNDLE_PATH, "offline.png")
+        offline_icon = os.path.join(BUNDLE_PATH, "local.png")
         self.offline_all_action.setIcon(QIcon(offline_icon) if os.path.exists(offline_icon) else self.style().standardIcon(QStyle.SP_DriveHDIcon))
         self.offline_all_action.triggered.connect(self.set_all_offline)
 
@@ -1127,7 +1127,7 @@ class ControlPanel(QWidget):
         
         tray_access = getattr(self, f"{name}_tray_access")
         tray_access.setText(mode_text)
-        acc_icon = "online.png" if is_online else "offline.png"
+        acc_icon = "public.png" if is_online else "local.png"
         acc_icon_path = os.path.join(BUNDLE_PATH, acc_icon)
         if os.path.exists(acc_icon_path):
             tray_access.setIcon(QIcon(acc_icon_path))
@@ -1137,7 +1137,7 @@ class ControlPanel(QWidget):
 
         # 4. Update Label Status Utama (Berbasis Status)
         status_label = getattr(self, f"{name}_status")
-        online_label = tr(lang, "status_online" if is_online else "status_offline")
+        online_label = tr(lang, "status_public" if is_online else "status_local")
         
         if is_running:
             base_status = tr(lang, f"{name}_status_running")

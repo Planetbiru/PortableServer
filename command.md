@@ -24,8 +24,8 @@ python -m PyInstaller ^
   --add-data "minimize.png;." ^
   --add-data "start.png;." ^
   --add-data "stop.png;." ^
-  --add-data "online.png;." ^
-  --add-data "offline.png;." ^
+  --add-data "public.png;." ^
+  --add-data "local.png;." ^
   --add-data "apache.png;." ^
   --add-data "mariadb.png;." ^
   --add-data "redis.png;." ^
