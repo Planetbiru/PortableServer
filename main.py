@@ -18,7 +18,7 @@ else:
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
     BUNDLE_PATH = BASE_PATH
 
-DB_PATH = os.path.join(BASE_PATH, "scheduler.db")
+DB_PATH = os.path.join(BASE_PATH, "setting.db")
 INI_PATH = os.path.join(BASE_PATH, "localization.ini")
 
 APACHE_PATH = os.path.join(BASE_PATH, "apache", "bin", "httpd.exe")
@@ -140,7 +140,7 @@ def init_db():
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('language', 'en')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('run_on_startup', '0')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_start_services', '0')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_width', '700')")
+    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_width', '800')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_height', '600')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_maximized', '0')")
     cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_access_mode', 'external')")
@@ -185,24 +185,40 @@ def set_setting(key, value):
 
 # --- Scheduler thread ---
 def scheduler_loop():
+    add_log("Scheduler thread started.")
     while True:
-        now = datetime.now()
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT cron_expr, command FROM jobs WHERE enabled=1")
-        jobs = cur.fetchall()
-        conn.close()
+        # Sinkronisasi: Tunggu hingga detik 00 pada menit berikutnya berdasarkan system clock
+        now_ts = time.time()
+        wait_time = 60 - (now_ts % 60)
+        # Tambahkan offset kecil (0.1 detik) untuk memastikan transisi menit sudah sempurna
+        time.sleep(wait_time + 0.1)
 
-        for cron_expr, cmd in jobs:
-            try:
-                itr = croniter(cron_expr, now)
-                prev_time = itr.get_prev(datetime)
-                if abs((now - prev_time).total_seconds()) < 60:
-                    subprocess.Popen(cmd, shell=True,
-                                     creationflags=subprocess.CREATE_NO_WINDOW)
-            except Exception:
-                pass
-        time.sleep(30)
+        # Ambil waktu saat ini dengan presisi menit (detik dan mikrodetik diabaikan)
+        current_time = datetime.now().replace(second=0, microsecond=0)
+        
+        try:
+            # Membaca semua scheduler yang aktif dari database dan simpan di memory (variabel jobs_in_memory)
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT cron_expr, command FROM jobs WHERE enabled=1")
+            jobs_in_memory = cur.fetchall()
+            conn.close()
+
+            for cron_expr, command in jobs_in_memory:
+                # Skip job jika command kosong atau hanya berisi spasi
+                if not command or not command.strip():
+                    continue
+                try:
+                    # Periksa apakah pattern cron cocok dengan waktu menit ini
+                    if croniter.match(cron_expr, current_time):
+                        # Jalankan task tanpa memunculkan window console (penting untuk script PHP/Background task)
+                        subprocess.Popen(command, shell=True,
+                                         creationflags=subprocess.CREATE_NO_WINDOW)
+                except Exception as e:
+                    # Abaikan error pada pattern tertentu agar loop tetap berjalan
+                    pass
+        except Exception as e:
+            add_log(f"Scheduler loop error: {str(e)}", "ERROR")
 
 # --- Access control (edit config files) ---
 def set_apache_access(external=False, force=False):
@@ -433,12 +449,124 @@ class SchedulerDialog(QDialog):
                 conn.close()
                 self.load_jobs()
 
+class MariaDBPasswordDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.setWindowTitle(tr(parent.current_lang, "db_password_title"))
+        self.setModal(True)
+        self.resize(350, 200)
+        
+        layout = QGridLayout()
+        
+        layout.addWidget(QLabel(tr(parent.current_lang, "lbl_current_password")), 0, 0)
+        self.current_pass_input = QLineEdit()
+        self.current_pass_input.setEchoMode(QLineEdit.Password)
+        layout.addWidget(self.current_pass_input, 0, 1)
+        
+        layout.addWidget(QLabel(tr(parent.current_lang, "lbl_new_password")), 1, 0)
+        self.new_pass_input = QLineEdit()
+        self.new_pass_input.setEchoMode(QLineEdit.Password)
+        layout.addWidget(self.new_pass_input, 1, 1)
+        
+        layout.addWidget(QLabel(tr(parent.current_lang, "lbl_repeat_password")), 2, 0)
+        self.repeat_pass_input = QLineEdit()
+        self.repeat_pass_input.setEchoMode(QLineEdit.Password)
+        layout.addWidget(self.repeat_pass_input, 2, 1)
+        
+        self.chk_force_reset = QCheckBox(tr(parent.current_lang, "chk_force_reset"))
+        layout.addWidget(self.chk_force_reset, 3, 1)
+        
+        self.btn_change = QPushButton(tr(parent.current_lang, "btn_change_password"))
+        self.btn_change.clicked.connect(self.change_password)
+        layout.addWidget(self.btn_change, 4, 0, 1, 2)
+        
+        self.setLayout(layout)
+        direction = self.parent.get_lang_dir(self.parent.current_lang)
+        self.setLayoutDirection(Qt.RightToLeft if direction == 'rtl' else Qt.LeftToRight)
+
+    def change_password(self):
+        curr_pass = self.current_pass_input.text()
+        new_pass = self.new_pass_input.text()
+        repeat_pass = self.repeat_pass_input.text()
+        force = self.chk_force_reset.isChecked()
+
+        if new_pass != repeat_pass:
+            QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_password_mismatch"))
+            return
+
+        if force:
+            # Force Reset Logic
+            self.parent.stop_service("mysql")
+            time.sleep(1)
+            
+            init_file = os.path.join(BASE_PATH, "tmp", "reset_pass.sql")
+            os.makedirs(os.path.dirname(init_file), exist_ok=True)
+            sql_cmd = f"FLUSH PRIVILEGES;\nALTER USER 'root'@'localhost' IDENTIFIED BY '{new_pass}';\n"
+            try:
+                with open(init_file, "w") as f:
+                    f.write(sql_cmd)
+                
+                conf = os.path.join(BASE_PATH, "config", "my.ini")
+                args = [MYSQL_PATH, f"--defaults-file={conf}", f"--init-file={init_file}", "--console"]
+                proc = subprocess.Popen(args, cwd=os.path.join(BASE_PATH, "mysql"), 
+                                         creationflags=subprocess.CREATE_NO_WINDOW)
+                
+                # Tunggu eksekusi file init
+                time.sleep(5)
+                subprocess.run(["taskkill", "/F", "/PID", str(proc.pid)], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, 
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+                
+                if os.path.exists(init_file):
+                    os.remove(init_file)
+                
+                QMessageBox.information(self, "Success", tr(self.parent.current_lang, "msg_password_changed_success"))
+                self.accept()
+            except Exception as e:
+                add_log(f"Force reset failed: {str(e)}", "ERROR")
+                QMessageBox.critical(self, "Error", f"{tr(self.parent.current_lang, 'msg_password_change_failed')}\n{str(e)}")
+        else:
+            # Standard change using client
+            client_path = os.path.join(BASE_PATH, "mysql", "bin", "mariadb.exe")
+            if not os.path.exists(client_path):
+                client_path = os.path.join(BASE_PATH, "mysql", "bin", "mysql.exe")
+                
+            if not os.path.exists(client_path):
+                QMessageBox.critical(self, "Error", "MariaDB client (mariadb.exe/mysql.exe) not found.")
+                return
+
+            # Pastikan service menyala untuk ganti password normal
+            if not is_port_in_use(int(get_setting('mysql_port', '3306'))):
+                self.parent.run_service("mysql", MYSQL_PATH)
+                time.sleep(2)
+
+            sql = f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{new_pass}';"
+            cmd = [client_path, "-u", "root"]
+            if curr_pass:
+                cmd.append(f"-p{curr_pass}")
+            cmd.extend(["-e", sql])
+            
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                if result.returncode == 0:
+                    QMessageBox.information(self, "Success", tr(self.parent.current_lang, "msg_password_changed_success"))
+                    self.accept()
+                else:
+                    err = result.stderr.lower()
+                    if "access denied" in err:
+                        QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_current_password_wrong"))
+                    else:
+                        QMessageBox.critical(self, "Error", f"{tr(self.parent.current_lang, 'msg_password_change_failed')}\n{result.stderr}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"{tr(self.parent.current_lang, 'msg_password_change_failed')}\n{str(e)}")
+
 class ControlPanel(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Server Control Panel")
-        self.move(300, 300)
-        width = int(get_setting('window_width', '700'))
+        self.move(100, 100)
+        width = int(get_setting('window_width', '800'))
         height = int(get_setting('window_height', '600'))
         self.resize(width, height)
 
@@ -597,6 +725,9 @@ class ControlPanel(QWidget):
         self.btn_mysql_local.clicked.connect(lambda: self.change_access("mysql", False))
         self.btn_mysql_external = QPushButton()
         self.btn_mysql_external.clicked.connect(lambda: self.change_access("mysql", True))
+        # Tombol Password MariaDB
+        self.btn_mysql_password = QPushButton()
+        self.btn_mysql_password.clicked.connect(self.open_mysql_password_dialog)
 
         # Tombol Redis
         self.btn_redis_manual = QPushButton()
@@ -643,6 +774,7 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_mysql_stop, 2, 2)
         layout.addWidget(self.btn_mysql_local, 2, 3)
         layout.addWidget(self.btn_mysql_external, 2, 4)
+        layout.addWidget(self.btn_mysql_password, 2, 5)
 
         # Baris 3: Redis
         layout.addWidget(self.redis_status, 3, 0)
@@ -652,13 +784,13 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_redis_external, 3, 4)
 
         # Baris 4 dan 5: Global Settings
-        layout.addWidget(self.chk_run_startup, 4, 0, 1, 2)
-        layout.addWidget(self.chk_auto_start_services, 5, 0, 1, 2)
+        layout.addWidget(self.chk_run_startup, 4, 0, 1, 3)
+        layout.addWidget(self.chk_auto_start_services, 5, 0, 1, 3)
 
         # Baris 6-7: Logs
-        layout.addWidget(self.log_label, 6, 0, 1, 4)
-        layout.addWidget(self.btn_clear_logs, 6, 4)
-        layout.addWidget(self.log_table, 7, 0, 1, 5)
+        layout.addWidget(self.log_label, 6, 0, 1, 5)
+        layout.addWidget(self.btn_clear_logs, 6, 5)
+        layout.addWidget(self.log_table, 7, 0, 1, 6)
 
         self.setLayout(layout)
 
@@ -696,6 +828,7 @@ class ControlPanel(QWidget):
         self.btn_mysql_stop.setText(tr(self.current_lang, "btn_mysql_stop"))
         self.btn_mysql_local.setText(tr(self.current_lang, "btn_mysql_local"))
         self.btn_mysql_external.setText(tr(self.current_lang, "btn_mysql_external"))
+        self.btn_mysql_password.setText(tr(self.current_lang, "btn_reset_mysql_password"))
 
         self.btn_redis_manual.setText(tr(self.current_lang, "btn_redis_run"))
         self.btn_redis_stop.setText(tr(self.current_lang, "btn_redis_stop"))
@@ -844,6 +977,10 @@ class ControlPanel(QWidget):
 
     def open_scheduler(self):
         dialog = SchedulerDialog(self)
+        dialog.exec_()
+
+    def open_mysql_password_dialog(self):
+        dialog = MariaDBPasswordDialog(self)
         dialog.exec_()
 
     def apply_port_settings(self):

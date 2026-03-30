@@ -6,12 +6,14 @@ A lightweight, portable server management tool built with Python and PyQt5. This
 
 *   **Service Management:** Individual and batch control (Start/Stop) for Apache, MariaDB, and Redis.
 *   **Access Control:** Quickly toggle services between **Local Mode** (127.0.0.1) and **Public Mode** (0.0.0.0).
-*   **Cron Scheduler:** Manage scheduled tasks using standard cron expressions to execute system commands.
+*   **MariaDB Password Management:** Change or reset the MariaDB root password, including a **Force Reset** option for forgotten passwords.
+*   **Precise Cron Scheduler:** Execute system commands or PHP scripts using cron expressions. Tasks run in the background without console windows. Status can be toggled directly from the UI.
 *   **System Tray Integration:** Run the application in the background. Minimize to tray and control services via the context menu.
 *   **Port Collision Detection:** Automatically checks if ports 80 (Apache) or 3306 (MySQL) are already in use before starting services.
 *   **Activity Logging:** Real-time logging of service actions and environment changes, stored in a local SQLite database.
 *   **Automatic Configuration:** Automatically generates configuration files (`httpd.conf`, `php.ini`, `my.ini`, `redis.conf`) from templates, dynamically injecting the current installation directory path.
-*   **Multi-language Support:** Comprehensive localization including English, Indonesian, Malay, Javanese, Sundanese, Chinese, Japanese, Korean, Hindi, and Arabic (with RTL support).
+*   **Multi-language Support:** Comprehensive localization including English, Indonesian, Malay, Javanese, Sundanese, Chinese, Japanese, Korean, Hindi, Arabic, and Urdu.
+*   **RTL Support:** Automatic layout adjustment for Right-to-Left languages like Arabic and Urdu.
 *   **Windows Integration:** Option to run on Windows startup and built-in Mutex to prevent multiple instances from running.
 *   **Responsive UI:** Remembers your window size and maximization state for the next session.
 
@@ -48,7 +50,7 @@ A lightweight, portable server management tool built with Python and PyQt5. This
     ```
 2.  The application will automatically prepare the environment (create `www`, `logs`, `tmp` folders) and generate configuration files.
 3.  Use the main panel to start your services.
-4.  Add cron jobs in the scheduler section to automate tasks.
+4.  Add cron jobs in the scheduler section to automate tasks. You can enable/disable jobs by update it status in the database.
 
 ## 📂 Project Structure
 
