@@ -736,6 +736,8 @@ class ControlPanel(QWidget):
         self.btn_apache_local.clicked.connect(lambda: self.change_access("apache", False))
         self.btn_apache_external = QPushButton()
         self.btn_apache_external.clicked.connect(lambda: self.change_access("apache", True))
+        self.btn_apache_config = QPushButton()
+        self.btn_apache_config.clicked.connect(lambda: self.open_config("apache", True))
 
         # Tombol MariaDB
         self.btn_mysql_manual = QPushButton()
@@ -746,6 +748,8 @@ class ControlPanel(QWidget):
         self.btn_mysql_local.clicked.connect(lambda: self.change_access("mysql", False))
         self.btn_mysql_external = QPushButton()
         self.btn_mysql_external.clicked.connect(lambda: self.change_access("mysql", True))
+        self.btn_mysql_config = QPushButton()
+        self.btn_mysql_config.clicked.connect(lambda: self.open_config("mysql", True))
         # Tombol Password MariaDB
         self.btn_mysql_password = QPushButton()
         self.btn_mysql_password.clicked.connect(self.open_mysql_password_dialog)
@@ -759,6 +763,8 @@ class ControlPanel(QWidget):
         self.btn_redis_local.clicked.connect(lambda: self.change_access("redis", False))
         self.btn_redis_external = QPushButton()
         self.btn_redis_external.clicked.connect(lambda: self.change_access("redis", True))
+        self.btn_redis_config = QPushButton()
+        self.btn_redis_config.clicked.connect(lambda: self.open_config("redis", True))
 
         # UI Logs
         self.log_label = QLabel()
@@ -781,6 +787,7 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_scheduler_settings, 0, 2, 1, 1)
         layout.addWidget(self.btn_settings, 0, 3, 1, 1)
         layout.addWidget(self.btn_minimize, 0, 4, 1, 1)
+        layout.addWidget(self.btn_mysql_password, 0, 5)
 
         # Baris 1: Apache (Status, Run, Stop, Local, External)
         layout.addWidget(self.apache_status, 1, 0)
@@ -788,6 +795,7 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_apache_stop, 1, 2)
         layout.addWidget(self.btn_apache_local, 1, 3)
         layout.addWidget(self.btn_apache_external, 1, 4)
+        layout.addWidget(self.btn_apache_config, 1, 5);
 
         # Baris 2: MySQL
         layout.addWidget(self.mysql_status, 2, 0)
@@ -795,7 +803,8 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_mysql_stop, 2, 2)
         layout.addWidget(self.btn_mysql_local, 2, 3)
         layout.addWidget(self.btn_mysql_external, 2, 4)
-        layout.addWidget(self.btn_mysql_password, 2, 5)
+        layout.addWidget(self.btn_mysql_config, 2, 5)
+        
 
         # Baris 3: Redis
         layout.addWidget(self.redis_status, 3, 0)
@@ -803,6 +812,7 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_redis_stop, 3, 2)
         layout.addWidget(self.btn_redis_local, 3, 3)
         layout.addWidget(self.btn_redis_external, 3, 4)
+        layout.addWidget(self.btn_redis_config, 3, 5)
 
         # Baris 4 dan 5: Global Settings
         layout.addWidget(self.chk_run_startup, 4, 0, 1, 3)
@@ -827,6 +837,35 @@ class ControlPanel(QWidget):
         self.status_timer.timeout.connect(self.update_service_status)
         self.status_timer.start(2000)
 
+    def open_config(self, service, use_notepad=True):
+        try:
+            # Mapping path config per service
+            config_map = {
+                "apache": os.path.join(BASE_PATH, "config", "httpd.conf"),
+                "mysql": os.path.join(BASE_PATH, "config", "my.ini"),
+                "redis": os.path.join(BASE_PATH, "redis", "redis.windows.conf"),
+            }
+
+            if service not in config_map:
+                QMessageBox.warning(self, tr(self.current_lang, "fatal_error_title"), f"{tr(lang, 'msg_unknown_service')}\n{service}")
+                return
+
+            config_path = config_map[service]
+
+            if not os.path.exists(config_path):
+                QMessageBox.warning(self, tr(self.current_lang, "fatal_error_title"), f"{tr(lang, 'msg_file_not_found')}\n{config_path}")
+                return
+
+            # Buka dengan Notepad (default Windows)
+            if use_notepad:
+                subprocess.Popen(["notepad.exe", config_path])
+            else:
+                # fallback: buka dengan default app
+                os.startfile(config_path)
+
+        except Exception as e:
+            QMessageBox.critical(self, tr(self.current_lang, "fatal_error_title"), str(e))
+
     def get_lang_dir(self, lang):
         if lang in config and 'lang_dir' in config[lang]:
             return config[lang]['lang_dir'].lower()
@@ -844,17 +883,20 @@ class ControlPanel(QWidget):
         self.btn_apache_stop.setText(tr(self.current_lang, "btn_apache_stop"))
         self.btn_apache_local.setText(tr(self.current_lang, "btn_apache_local"))
         self.btn_apache_external.setText(tr(self.current_lang, "btn_apache_external"))
+        self.btn_apache_config.setText(tr(self.current_lang, "btn_apache_config"))
 
         self.btn_mysql_manual.setText(tr(self.current_lang, "btn_mysql_run"))
         self.btn_mysql_stop.setText(tr(self.current_lang, "btn_mysql_stop"))
         self.btn_mysql_local.setText(tr(self.current_lang, "btn_mysql_local"))
         self.btn_mysql_external.setText(tr(self.current_lang, "btn_mysql_external"))
+        self.btn_mysql_config.setText(tr(self.current_lang, "btn_mysql_config"))
         self.btn_mysql_password.setText(tr(self.current_lang, "btn_reset_mysql_password"))
 
         self.btn_redis_manual.setText(tr(self.current_lang, "btn_redis_run"))
         self.btn_redis_stop.setText(tr(self.current_lang, "btn_redis_stop"))
         self.btn_redis_local.setText(tr(self.current_lang, "btn_redis_local"))
         self.btn_redis_external.setText(tr(self.current_lang, "btn_redis_external"))
+        self.btn_redis_config.setText(tr(self.current_lang, "btn_redis_config"))
 
         self.btn_open_browser.setText(tr(self.current_lang, "btn_open_browser"))
         self.btn_minimize.setText(tr(self.current_lang, "btn_minimize"))
