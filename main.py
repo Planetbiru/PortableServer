@@ -185,24 +185,40 @@ def set_setting(key, value):
 
 # --- Scheduler thread ---
 def scheduler_loop():
+    add_log("Scheduler thread started.")
     while True:
-        now = datetime.now()
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT cron_expr, command FROM jobs WHERE enabled=1")
-        jobs = cur.fetchall()
-        conn.close()
+        # Sinkronisasi: Tunggu hingga detik 00 pada menit berikutnya berdasarkan system clock
+        now_ts = time.time()
+        wait_time = 60 - (now_ts % 60)
+        # Tambahkan offset kecil (0.1 detik) untuk memastikan transisi menit sudah sempurna
+        time.sleep(wait_time + 0.1)
 
-        for cron_expr, cmd in jobs:
-            try:
-                itr = croniter(cron_expr, now)
-                prev_time = itr.get_prev(datetime)
-                if abs((now - prev_time).total_seconds()) < 60:
-                    subprocess.Popen(cmd, shell=True,
-                                     creationflags=subprocess.CREATE_NO_WINDOW)
-            except Exception:
-                pass
-        time.sleep(30)
+        # Ambil waktu saat ini dengan presisi menit (detik dan mikrodetik diabaikan)
+        current_time = datetime.now().replace(second=0, microsecond=0)
+        
+        try:
+            # Membaca semua scheduler yang aktif dari database dan simpan di memory (variabel jobs_in_memory)
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT cron_expr, command FROM jobs WHERE enabled=1")
+            jobs_in_memory = cur.fetchall()
+            conn.close()
+
+            for cron_expr, command in jobs_in_memory:
+                # Skip job jika command kosong atau hanya berisi spasi
+                if not command or not command.strip():
+                    continue
+                try:
+                    # Periksa apakah pattern cron cocok dengan waktu menit ini
+                    if croniter.match(cron_expr, current_time):
+                        # Jalankan task tanpa memunculkan window console (penting untuk script PHP/Background task)
+                        subprocess.Popen(command, shell=True,
+                                         creationflags=subprocess.CREATE_NO_WINDOW)
+                except Exception as e:
+                    # Abaikan error pada pattern tertentu agar loop tetap berjalan
+                    pass
+        except Exception as e:
+            add_log(f"Scheduler loop error: {str(e)}", "ERROR")
 
 # --- Access control (edit config files) ---
 def set_apache_access(external=False, force=False):
