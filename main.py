@@ -1332,14 +1332,29 @@ class ControlPanel(QWidget):
                 add_log(f"Service {name} didn't stop in time, forcing kill...", "WARNING")
                 proc.kill()
         else:
-            # Fallback menggunakan PID yang tersimpan di DB (jika aplikasi di-restart)
-            pid = get_setting(f"{name}_pid", "0")
-            if pid != "0":
-                # Taskkill tanpa /F mengirim signal penutupan yang sopan
-                subprocess.run(["taskkill", "/PID", pid], 
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               creationflags=subprocess.CREATE_NO_WINDOW)
-                add_log(f"Sent graceful termination to PID {pid}")
+            # Fallback menggunakan image name jika objek proses tidak tersedia (misal: aplikasi di-restart)
+            # Menggunakan taskkill /IM /F sesuai permintaan pengguna.
+            # PERHATIAN: Ini akan menghentikan SEMUA proses dengan nama gambar yang sama,
+            # bukan hanya yang dimulai oleh panel ini.
+            image_name_map = {
+                "apache": "httpd.exe",
+                "mysql": "mysqld.exe",
+                "redis": "redis-server.exe"
+            }
+            image_name = image_name_map.get(name)
+            if image_name:
+                try:
+                    subprocess.run(["taskkill", "/IM", image_name, "/F"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   creationflags=subprocess.CREATE_NO_WINDOW,
+                                   check=True) # check=True akan memunculkan CalledProcessError untuk kode keluar non-nol
+                    add_log(f"Sent forceful termination to all processes with image name {image_name}.")
+                except subprocess.CalledProcessError:
+                    add_log(f"No process with image name {image_name} found to terminate.", "INFO")
+                except Exception as e:
+                    add_log(f"Error while trying to terminate {image_name} by image name: {e}", "ERROR")
+            else:
+                add_log(f"Unknown service image name for {name}, cannot use taskkill /IM.", "ERROR")
 
         setattr(self, f"{name}_proc", None)
         set_setting(f"{name}_pid", "0")
