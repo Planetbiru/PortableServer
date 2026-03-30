@@ -507,34 +507,52 @@ class MariaDBPasswordDialog(QDialog):
         self.setLayoutDirection(Qt.RightToLeft if direction == 'rtl' else Qt.LeftToRight)
 
     def change_password(self):
+        # 1. Ambil input dan bersihkan spasi jika perlu
         curr_pass = self.current_pass_input.text()
         new_pass = self.new_pass_input.text()
         repeat_pass = self.repeat_pass_input.text()
         force = self.chk_force_reset.isChecked()
+        lang = self.parent.current_lang
 
-        if new_pass != repeat_pass:
-            QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_password_mismatch"))
+        # 2. Validasi Dasar
+        if not new_pass:
+            QMessageBox.warning(self, tr(lang, "error_title"), "Password baru tidak boleh kosong.")
             return
 
+        if new_pass != repeat_pass:
+            QMessageBox.warning(self, tr(lang, "error_title"), tr(lang, "msg_password_mismatch"))
+            return
+
+        # Escape single quotes untuk keamanan SQL manual
+        # Ini mencegah password seperti "Jum'at" merusak query
+        escaped_pass = new_pass.replace("'", "''")
+
         if force:
-            # Force Reset Logic
             self.parent.stop_service("mysql")
             time.sleep(1)
             
             init_file = os.path.join(BASE_PATH, "tmp", "reset_pass.sql")
             os.makedirs(os.path.dirname(init_file), exist_ok=True)
-            sql_cmd = f"FLUSH PRIVILEGES;\nALTER USER 'root'@'localhost' IDENTIFIED BY '{new_pass}';\n"
+            
+            # Gunakan FLUSH PRIVILEGES agar perubahan langsung terbaca
+            sql_cmd = f"FLUSH PRIVILEGES;\nALTER USER 'root'@'localhost' IDENTIFIED BY '{escaped_pass}';\n"
+            
             try:
-                with open(init_file, "w") as f:
+                # Gunakan encoding utf-8 agar mendukung password non-ASCII jika user memaksa
+                with open(init_file, "w", encoding='utf-8') as f:
                     f.write(sql_cmd)
                 
                 conf = os.path.join(BASE_PATH, "config", "my.ini")
+                # Tambahkan --skip-grant-tables jika perlu, tapi --init-file biasanya sudah cukup
                 args = [MYSQL_PATH, f"--defaults-file={conf}", f"--init-file={init_file}", "--console"]
-                proc = subprocess.Popen(args, cwd=os.path.join(BASE_PATH, "mysql"), 
-                                         creationflags=subprocess.CREATE_NO_WINDOW)
                 
-                # Tunggu eksekusi file init
-                time.sleep(5)
+                proc = subprocess.Popen(args, cwd=os.path.join(BASE_PATH, "mysql"), 
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+                
+                # Beri waktu sedikit lebih lama agar MariaDB benar-benar siap
+                time.sleep(3) 
+                
+                # Matikan proses sementara tadi
                 subprocess.run(["taskkill", "/F", "/PID", str(proc.pid)], 
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, 
                                creationflags=subprocess.CREATE_NO_WINDOW)
@@ -542,45 +560,44 @@ class MariaDBPasswordDialog(QDialog):
                 if os.path.exists(init_file):
                     os.remove(init_file)
                 
-                QMessageBox.information(self, "Success", tr(self.parent.current_lang, "msg_password_changed_success"))
+                QMessageBox.information(self, tr(lang, "success_title"), tr(lang, "msg_password_changed_success"))
                 self.accept()
             except Exception as e:
                 add_log(f"Force reset failed: {str(e)}", "ERROR")
-                QMessageBox.critical(self, "Error", f"{tr(self.parent.current_lang, 'msg_password_change_failed')}\n{str(e)}")
+                QMessageBox.critical(self, tr(lang, "error_title"), f"{tr(lang, 'msg_password_change_failed')}\n{str(e)}")
         else:
-            # Standard change using client
+            # Standard change logic
             client_path = os.path.join(BASE_PATH, "mysql", "bin", "mariadb.exe")
             if not os.path.exists(client_path):
                 client_path = os.path.join(BASE_PATH, "mysql", "bin", "mysql.exe")
                 
             if not os.path.exists(client_path):
-                QMessageBox.critical(self, "Error", "MariaDB client (mariadb.exe/mysql.exe) not found.")
+                QMessageBox.critical(self, tr(lang, "error_title"), "MariaDB client not found.")
                 return
 
-            # Pastikan service menyala untuk ganti password normal
-            if not is_port_in_use(int(get_setting('mysql_port', '3306'))):
-                self.parent.run_service("mysql", MYSQL_PATH)
-                time.sleep(2)
-
-            sql = f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{new_pass}';"
+            # Gunakan subprocess.run dengan input untuk keamanan (menghindari pass di argumen CMD)
+            sql = f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{escaped_pass}';"
             cmd = [client_path, "-u", "root"]
             if curr_pass:
+                # Menempelkan password ke -p (misal -proot123)
                 cmd.append(f"-p{curr_pass}")
+            
             cmd.extend(["-e", sql])
             
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                result = subprocess.run(cmd, capture_output=True, text=True, 
+                                        creationflags=subprocess.CREATE_NO_WINDOW)
                 if result.returncode == 0:
-                    QMessageBox.information(self, "Success", tr(self.parent.current_lang, "msg_password_changed_success"))
+                    QMessageBox.information(self, tr(lang, "success_title"), tr(lang, "msg_password_changed_success"))
                     self.accept()
                 else:
                     err = result.stderr.lower()
                     if "access denied" in err:
-                        QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_current_password_wrong"))
+                        QMessageBox.warning(self, tr(lang, "error_title"), tr(lang, "msg_current_password_wrong"))
                     else:
-                        QMessageBox.critical(self, "Error", f"{tr(self.parent.current_lang, 'msg_password_change_failed')}\n{result.stderr}")
+                        QMessageBox.critical(self, tr(lang, "error_title"), f"{tr(lang, 'msg_password_change_failed')}\n{result.stderr}")
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"{tr(self.parent.current_lang, 'msg_password_change_failed')}\n{str(e)}")
+                QMessageBox.critical(self, tr(lang, "error_title"), f"{tr(lang, 'msg_password_change_failed')}\n{str(e)}")
 
 class ControlPanel(QWidget):
     def __init__(self):
@@ -601,14 +618,29 @@ class ControlPanel(QWidget):
         # Tombol Apache (Gunakan satu tombol untuk Start/Stop)
         self.btn_apache_toggle = QPushButton()
         self.btn_apache_toggle.clicked.connect(lambda: self.toggle_service_action("apache", APACHE_PATH))
+        self.btn_apache_access_toggle = QPushButton()
+        self.btn_apache_access_toggle.clicked.connect(lambda: self.toggle_access_action("apache"))
 
         # MySQL
         self.btn_mysql_toggle = QPushButton()
         self.btn_mysql_toggle.clicked.connect(lambda: self.toggle_service_action("mysql", MYSQL_PATH))
+        self.btn_mysql_access_toggle = QPushButton()
+        self.btn_mysql_access_toggle.clicked.connect(lambda: self.toggle_access_action("mysql"))
 
         # Redis
         self.btn_redis_toggle = QPushButton()
         self.btn_redis_toggle.clicked.connect(lambda: self.toggle_service_action("redis", REDIS_PATH))
+        self.btn_redis_access_toggle = QPushButton()
+        self.btn_redis_access_toggle.clicked.connect(lambda: self.toggle_access_action("redis"))
+
+        # Menu for Apache Configuration Dropdown
+        self.apache_config_menu = QMenu(self)
+        self.action_httpd_conf = QAction("httpd.conf", self)
+        self.action_httpd_conf.triggered.connect(lambda: self.open_config("apache"))
+        self.action_php_ini = QAction("php.ini", self)
+        self.action_php_ini.triggered.connect(lambda: self.open_config("php"))
+        self.apache_config_menu.addAction(self.action_httpd_conf)
+        self.apache_config_menu.addAction(self.action_php_ini)
 
         # Tambahkan padding horizontal agar caption tidak menyentuh tepi tombol
         self.setStyleSheet("""
@@ -692,6 +724,33 @@ class ControlPanel(QWidget):
         self.tray_menu.addAction(self.online_all_action)
         self.tray_menu.addAction(self.offline_all_action)
         self.tray_menu.addSeparator()
+
+        # Individual Service Menus in Tray (Toggle Support)
+        self.apache_tray_menu = self.tray_menu.addMenu("Apache")
+        self.apache_tray_run = QAction("", self)
+        self.apache_tray_run.triggered.connect(lambda: self.toggle_service_action("apache", APACHE_PATH))
+        self.apache_tray_access = QAction("", self)
+        self.apache_tray_access.triggered.connect(lambda: self.toggle_access_action("apache"))
+        self.apache_tray_menu.addAction(self.apache_tray_run)
+        self.apache_tray_menu.addAction(self.apache_tray_access)
+
+        self.mysql_tray_menu = self.tray_menu.addMenu("MariaDB")
+        self.mysql_tray_run = QAction("", self)
+        self.mysql_tray_run.triggered.connect(lambda: self.toggle_service_action("mysql", MYSQL_PATH))
+        self.mysql_tray_access = QAction("", self)
+        self.mysql_tray_access.triggered.connect(lambda: self.toggle_access_action("mysql"))
+        self.mysql_tray_menu.addAction(self.mysql_tray_run)
+        self.mysql_tray_menu.addAction(self.mysql_tray_access)
+
+        self.redis_tray_menu = self.tray_menu.addMenu("Redis")
+        self.redis_tray_run = QAction("", self)
+        self.redis_tray_run.triggered.connect(lambda: self.toggle_service_action("redis", REDIS_PATH))
+        self.redis_tray_access = QAction("", self)
+        self.redis_tray_access.triggered.connect(lambda: self.toggle_access_action("redis"))
+        self.redis_tray_menu.addAction(self.redis_tray_run)
+        self.redis_tray_menu.addAction(self.redis_tray_access)
+
+        self.tray_menu.addSeparator()
         self.tray_menu.addAction(self.exit_action)
         self.tray_icon.setContextMenu(self.tray_menu)
         self.tray_icon.activated.connect(self.on_tray_activated)
@@ -740,28 +799,26 @@ class ControlPanel(QWidget):
         self.redis_status = QLabel()
 
         # Service Buttons (Access & Config)
-        self.btn_apache_local = QPushButton()
-        self.btn_apache_local.clicked.connect(lambda: self.change_access("apache", False))
-        self.btn_apache_external = QPushButton()
-        self.btn_apache_external.clicked.connect(lambda: self.change_access("apache", True))
         self.btn_apache_config = QPushButton()
-        self.btn_apache_config.clicked.connect(lambda: self.open_config("apache", True))
+        self.btn_apache_config.setMenu(self.apache_config_menu)
+        self.btn_apache_www = QPushButton()
+        self.btn_apache_www.clicked.connect(lambda: os.startfile(os.path.join(BASE_PATH, "www")))
 
-        self.btn_mysql_local = QPushButton()
-        self.btn_mysql_local.clicked.connect(lambda: self.change_access("mysql", False))
-        self.btn_mysql_external = QPushButton()
-        self.btn_mysql_external.clicked.connect(lambda: self.change_access("mysql", True))
         self.btn_mysql_config = QPushButton()
         self.btn_mysql_config.clicked.connect(lambda: self.open_config("mysql", True))
+        self.btn_mysql_pma = QPushButton()
+        self.btn_mysql_pma.clicked.connect(lambda: webbrowser.open(f"http://localhost:{get_setting('apache_port', '80')}/phpMyAdmin"))
+
         self.btn_mysql_password = QPushButton()
         self.btn_mysql_password.clicked.connect(self.open_mysql_password_dialog)
 
-        self.btn_redis_local = QPushButton()
-        self.btn_redis_local.clicked.connect(lambda: self.change_access("redis", False))
-        self.btn_redis_external = QPushButton()
-        self.btn_redis_external.clicked.connect(lambda: self.change_access("redis", True))
         self.btn_redis_config = QPushButton()
         self.btn_redis_config.clicked.connect(lambda: self.open_config("redis", True))
+        self.btn_redis_cli = QPushButton()
+        self.btn_redis_cli.clicked.connect(lambda: subprocess.Popen(
+            [os.path.join(BASE_PATH, "redis", "redis-cli.exe")], 
+            creationflags=subprocess.CREATE_NEW_CONSOLE
+        ))
 
         # UI Logs
         self.log_label = QLabel()
@@ -789,24 +846,23 @@ class ControlPanel(QWidget):
         # Baris 1: Apache (Status, Run, Stop, Local, External)
         layout.addWidget(self.apache_status, 1, 0, 1, 2)
         layout.addWidget(self.btn_apache_toggle, 1, 2)
-        layout.addWidget(self.btn_apache_local, 1, 3)
-        layout.addWidget(self.btn_apache_external, 1, 4)
-        layout.addWidget(self.btn_apache_config, 1, 5);
+        layout.addWidget(self.btn_apache_access_toggle, 1, 3)
+        layout.addWidget(self.btn_apache_config, 1, 4)
+        layout.addWidget(self.btn_apache_www, 1, 5)
 
         # Baris 2: MySQL
         layout.addWidget(self.mysql_status, 2, 0, 1, 2)
         layout.addWidget(self.btn_mysql_toggle, 2, 2)
-        layout.addWidget(self.btn_mysql_local, 2, 3)
-        layout.addWidget(self.btn_mysql_external, 2, 4)
-        layout.addWidget(self.btn_mysql_config, 2, 5)
+        layout.addWidget(self.btn_mysql_access_toggle, 2, 3)
+        layout.addWidget(self.btn_mysql_config, 2, 4)
+        layout.addWidget(self.btn_mysql_pma, 2, 5)
         
-
         # Baris 3: Redis
         layout.addWidget(self.redis_status, 3, 0, 1, 2)
         layout.addWidget(self.btn_redis_toggle, 3, 2)
-        layout.addWidget(self.btn_redis_local, 3, 3)
-        layout.addWidget(self.btn_redis_external, 3, 4)
-        layout.addWidget(self.btn_redis_config, 3, 5)
+        layout.addWidget(self.btn_redis_access_toggle, 3, 3)
+        layout.addWidget(self.btn_redis_config, 3, 4)
+        layout.addWidget(self.btn_redis_cli, 3, 5)
 
         # Baris 4 dan 5: Global Settings
         layout.addWidget(self.chk_run_startup, 4, 0, 1, 3)
@@ -843,13 +899,28 @@ class ControlPanel(QWidget):
         else:
             self.run_service(name, path)
             
+    def toggle_access_action(self, name):
+        # Gunakan database sebagai referensi status, bukan pembacaan file fisik
+        is_online = get_setting(f"{name}_access_mode", "local") == "external"
+        self.change_access(name, not is_online)
+            
+    def open_config_file(self, config_path):
+        try:
+            if not os.path.exists(config_path):
+                QMessageBox.warning(self, tr(self.current_lang, "fatal_error_title"), f"{tr(self.current_lang, 'msg_file_not_found')}\n{config_path}")
+                return
+            subprocess.Popen(["notepad.exe", config_path])
+        except Exception as e:
+            QMessageBox.critical(self, tr(self.current_lang, "fatal_error_title"), str(e))
+
     def open_config(self, service, use_notepad=True):
         try:
             # Mapping path config per service
             config_map = {
-                "apache": os.path.join(BASE_PATH, "config", "httpd.conf"),
-                "mysql": os.path.join(BASE_PATH, "config", "my.ini"),
-                "redis": os.path.join(BASE_PATH, "redis", "redis.windows.conf"),
+                "apache": os.path.join(BASE_PATH, "config", "httpd-template.conf"),
+                "mysql": os.path.join(BASE_PATH, "config", "my-template.ini"),
+                "redis": os.path.join(BASE_PATH, "config", "redis.windows-service-template.conf"),
+                "php": os.path.join(BASE_PATH, "config", "php-template.ini"),
             }
 
             if service not in config_map:
@@ -888,20 +959,17 @@ class ControlPanel(QWidget):
         lang = self.current_lang
 
         # Update teks tombol Apache (Toggle diupdate via update_service_status)
-        self.btn_apache_local.setText(tr(lang, "btn_apache_local"))
-        self.btn_apache_external.setText(tr(lang, "btn_apache_external"))
         self.btn_apache_config.setText(tr(lang, "btn_apache_config"))
+        self.btn_apache_www.setText(tr(lang, "btn_open_www"))
 
         # Update teks tombol MariaDB
-        self.btn_mysql_local.setText(tr(lang, "btn_mysql_local"))
-        self.btn_mysql_external.setText(tr(lang, "btn_mysql_external"))
         self.btn_mysql_config.setText(tr(lang, "btn_mysql_config"))
+        self.btn_mysql_pma.setText(tr(lang, "btn_phpmyadmin"))
         self.btn_mysql_password.setText(tr(lang, "btn_reset_mysql_password"))
 
         # Update teks tombol Redis
-        self.btn_redis_local.setText(tr(lang, "btn_redis_local"))
-        self.btn_redis_external.setText(tr(lang, "btn_redis_external"))
         self.btn_redis_config.setText(tr(lang, "btn_redis_config"))
+        self.btn_redis_cli.setText(tr(lang, "btn_redis_cli"))
 
         self.btn_open_browser.setText(tr(lang, "btn_open_browser"))
         self.btn_minimize.setText(tr(lang, "btn_minimize"))
@@ -970,42 +1038,48 @@ class ControlPanel(QWidget):
         return False
 
     def update_service_status(self):
+        """Timer hanya memicu pembaruan UI untuk semua layanan secara kolektif."""
+        for service in ["apache", "mysql", "redis"]:
+            self.update_service_ui(service)
+
+    def update_service_ui(self, name):
+        """Fungsi mandiri untuk memperbarui seluruh elemen UI terkait satu layanan."""
         lang = self.current_lang
-        online_str = tr(lang, "status_online")
-        offline_str = tr(lang, "status_offline")
-
-        def get_status_info(name, port):
-            is_running = is_port_in_use(port)
-            is_online = self.check_online_config(name)
-            
-            # Perbarui label tombol toggle secara dinamis di sini
-            btn = getattr(self, f"btn_{name}_toggle")
-            btn.setText(tr(lang, f"btn_{name}_stop" if is_running else f"btn_{name}_run"))
-
-            if is_running:
-                base_text = tr(lang, f"{name}_status_running")
-                mode = online_str if is_online else offline_str
-                return f"{base_text} ({mode})", "color: green; font-weight: bold;"
-            else:
-                return tr(lang, f"{name}_status"), "color: red;"
         
-        # Apache
-        port_apache = int(get_setting('apache_port', '80'))
-        text, style = get_status_info("apache", port_apache)
-        self.apache_status.setText(text)
-        self.apache_status.setStyleSheet(style)
+        # 1. Deteksi Port dan Mode
+        port_defaults = {"apache": "80", "mysql": "3306", "redis": "6379"}
+        port = int(get_setting(f"{name}_port", port_defaults[name]))
+        is_running = is_port_in_use(port)
+        is_online = get_setting(f"{name}_access_mode", "local") == "external"
 
-        # MySQL
-        port_mysql = int(get_setting('mysql_port', '3306'))
-        text, style = get_status_info("mysql", port_mysql)
-        self.mysql_status.setText(text)
-        self.mysql_status.setStyleSheet(style)
+        # 2. Update Tombol Start/Stop (Berbasis Aksi)
+        run_key = f"btn_{name}_stop" if is_running else f"btn_{name}_run"
+        run_text = tr(lang, run_key)
+        getattr(self, f"btn_{name}_toggle").setText(run_text)
+        getattr(self, f"{name}_tray_run").setText(run_text)
 
-        # Redis
-        port_redis = int(get_setting('redis_port', '6379'))
-        text, style = get_status_info("redis", port_redis)
-        self.redis_status.setText(text)
-        self.redis_status.setStyleSheet(style)
+        # 3. Update Tombol Mode Akses (Berbasis Status - Sesuai Permintaan)
+        # Jika online, tampilkan "Public Mode". Jika offline, tampilkan "Local Mode".
+        mode_key = f"btn_{name}_external" if is_online else f"btn_{name}_local"
+        mode_text = tr(lang, mode_key)
+        getattr(self, f"btn_{name}_access_toggle").setText(mode_text)
+        getattr(self, f"{name}_tray_access").setText(mode_text)
+
+        # 4. Update Label Status Utama (Berbasis Status)
+        status_label = getattr(self, f"{name}_status")
+        online_label = tr(lang, "status_online" if is_online else "status_offline")
+        
+        if is_running:
+            base_status = tr(lang, f"{name}_status_running")
+            label_text = f"{base_status} ({online_label})"
+            style = "color: green; font-weight: bold;"
+        else:
+            base_status = tr(lang, f"{name}_status")
+            label_text = f"{base_status} ({online_label})"
+            style = "color: red;"
+        
+        status_label.setText(label_text)
+        status_label.setStyleSheet(style)
 
     def toggle_startup(self, state):
         enabled = (state == 2) # Qt.Checked
@@ -1070,35 +1144,34 @@ class ControlPanel(QWidget):
         QApplication.instance().quit()
 
     def start_all_services(self):
-        # Apache
-        apache_mode = get_setting('apache_access_mode', 'local') == 'external'
-        set_apache_access(apache_mode)
-        self.run_service("apache", APACHE_PATH)
-
-        # MySQL
-        mysql_mode = get_setting('mysql_access_mode', 'local') == 'external'
-        set_mysql_access(mysql_mode)
-        self.run_service("mysql", MYSQL_PATH)
-
-        # Redis
-        redis_mode = get_setting('redis_access_mode', 'local') == 'external'
-        set_redis_access(redis_mode)
-        self.run_service("redis", REDIS_PATH)
+        for name in ["apache", "mysql", "redis"]:
+            is_online = get_setting(f'{name}_access_mode', 'local') == 'external'
+            # Re-apply config based on current DB setting
+            if name == "apache": set_apache_access(is_online)
+            elif name == "mysql": set_mysql_access(is_online)
+            elif name == "redis": set_redis_access(is_online)
+            
+            path = APACHE_PATH if name == "apache" else (MYSQL_PATH if name == "mysql" else REDIS_PATH)
+            self.run_service(name, path)
 
     def stop_all_services(self):
         for svc in ["apache", "mysql", "redis"]:
             self.stop_service(svc)
 
     def set_all_online(self):
-        set_apache_access(True)
-        set_mysql_access(True)
-        set_redis_access(True)
+        """Mengubah semua layanan ke Mode Publik (Online)."""
+        add_log("Tray Action: Putting all services Online (Public Mode)...", "INFO")
+        set_apache_access(True, force=True)
+        set_mysql_access(True, force=True)
+        set_redis_access(True, force=True)
         self.update_service_status()
 
     def set_all_offline(self):
-        set_apache_access(False)
-        set_mysql_access(False)
-        set_redis_access(False)
+        """Mengubah semua layanan ke Mode Lokal (Offline)."""
+        add_log("Tray Action: Putting all services Offline (Local Mode)...", "INFO")
+        set_apache_access(False, force=True)
+        set_mysql_access(False, force=True)
+        set_redis_access(False, force=True)
         self.update_service_status()
 
     def initialize_mariadb(self):
