@@ -25,6 +25,8 @@ APACHE_PATH = os.path.join(BASE_PATH, "apache", "bin", "httpd.exe")
 MYSQL_PATH = os.path.join(BASE_PATH, "mysql", "bin", "mysqld.exe")
 REDIS_PATH = os.path.join(BASE_PATH, "redis", "redis-server.exe")
 
+db_lock = threading.RLock() # Re-entrant lock untuk mencegah deadlock pada nested calls
+
 class LogSignal(QObject):
     updated = pyqtSignal()
 
@@ -113,75 +115,81 @@ def tr(lang, key):
 
 # --- Database setup ---
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cron_expr TEXT NOT NULL,
-        command TEXT NOT NULL,
-        enabled INTEGER DEFAULT 1
-    )""")
-    try:
-        cur.execute("ALTER TABLE jobs ADD COLUMN enabled INTEGER DEFAULT 1")
-    except sqlite3.OperationalError:
-        pass
+    with db_lock:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cron_expr TEXT NOT NULL,
+            command TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1
+        )""")
+        try:
+            cur.execute("ALTER TABLE jobs ADD COLUMN enabled INTEGER DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
 
-    cur.execute("""CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-    )""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT NOT NULL,
-        level TEXT NOT NULL,
-        message TEXT NOT NULL
-    )""")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_minimized', '0')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('language', 'en')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('run_on_startup', '0')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_start_services', '0')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_width', '800')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_height', '600')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_maximized', '0')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_access_mode', 'external')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_access_mode', 'external')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_access_mode', 'external')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_port', '80')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_port', '3306')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_port', '6379')")
-    cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mariadb_installed', '0')")
-    conn.commit()
-    conn.close()
+        cur.execute("""CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL
+        )""")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_minimized', '0')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('language', 'en')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('run_on_startup', '0')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_start_services', '0')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_width', '800')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_height', '600')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('window_maximized', '0')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_access_mode', 'external')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_access_mode', 'external')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_access_mode', 'external')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_port', '80')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_port', '3306')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_port', '6379')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mariadb_installed', '0')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('apache_pid', '0')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('mysql_pid', '0')")
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('redis_pid', '0')")
+        conn.commit()
+        conn.close()
 
     prepare_environment()
-    # Pastikan file konfigurasi sinkron dengan pengaturan database saat startup
     set_apache_access(get_setting('apache_access_mode', 'local') == 'external', force=True)
     set_mysql_access(get_setting('mysql_access_mode', 'local') == 'external', force=True)
     set_redis_access(get_setting('redis_access_mode', 'local') == 'external', force=True)
 
 def add_log(message, level="INFO"):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cur.execute("INSERT INTO logs (timestamp, level, message) VALUES (?, ?, ?)", (ts, level, message))
-    conn.commit()
-    conn.close()
-    log_signal.updated.emit()
+    with db_lock:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute("INSERT INTO logs (timestamp, level, message) VALUES (?, ?, ?)", (ts, level, message))
+        conn.commit()
+        conn.close()
+        log_signal.updated.emit()
 
 def get_setting(key, default='0'):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT value FROM settings WHERE key=?", (key,))
-    row = cur.fetchone()
-    conn.close()
+    with db_lock:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = cur.fetchone()
+        conn.close()
     return row[0] if row else default
 
 def set_setting(key, value):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        conn.commit()
+        conn.close()
 
 # --- Scheduler thread ---
 def scheduler_loop():
@@ -196,12 +204,12 @@ def scheduler_loop():
         current_time = datetime.now().replace(second=0, microsecond=0)
         
         try:
-            # Membaca semua scheduler yang aktif dari database dan simpan di memory (variabel jobs_in_memory)
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute("SELECT cron_expr, command FROM jobs WHERE enabled=1")
-            jobs_in_memory = cur.fetchall()
-            conn.close()
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH)
+                cur = conn.cursor()
+                cur.execute("SELECT cron_expr, command FROM jobs WHERE enabled=1")
+                jobs_in_memory = cur.fetchall()
+                conn.close()
 
             for cron_expr, command in jobs_in_memory:
                 # Skip job jika command kosong atau hanya berisi spasi
@@ -397,10 +405,14 @@ class SchedulerDialog(QDialog):
 
     def load_jobs(self):
         self.job_table.setRowCount(0)
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT id, cron_expr, command, enabled FROM jobs")
-        for row_data in cur.fetchall():
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT id, cron_expr, command, enabled FROM jobs")
+            jobs = cur.fetchall()
+            conn.close()
+            
+        for row_data in jobs:
             row_num = self.job_table.rowCount()
             self.job_table.insertRow(row_num)
             for i, data in enumerate(row_data):
@@ -420,12 +432,13 @@ class SchedulerDialog(QDialog):
             QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_command_empty"))
             return
 
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("INSERT INTO jobs (cron_expr, command, enabled) VALUES (?, ?, ?)", 
-                    (cron, cmd, 1 if self.chk_enabled.isChecked() else 0))
-        conn.commit()
-        conn.close()
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("INSERT INTO jobs (cron_expr, command, enabled) VALUES (?, ?, ?)", 
+                        (cron, cmd, 1 if self.chk_enabled.isChecked() else 0))
+            conn.commit()
+            conn.close()
         self.load_jobs()
 
     def edit_job(self):
@@ -441,12 +454,13 @@ class SchedulerDialog(QDialog):
                 return
 
             job_id = self.job_table.item(curr, 0).text()
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute("UPDATE jobs SET cron_expr=?, command=?, enabled=? WHERE id=?", 
-                        (cron, cmd, 1 if self.chk_enabled.isChecked() else 0, job_id))
-            conn.commit()
-            conn.close()
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH)
+                cur = conn.cursor()
+                cur.execute("UPDATE jobs SET cron_expr=?, command=?, enabled=? WHERE id=?", 
+                            (cron, cmd, 1 if self.chk_enabled.isChecked() else 0, job_id))
+                conn.commit()
+                conn.close()
             self.load_jobs()
 
     def delete_job(self):
@@ -462,11 +476,12 @@ class SchedulerDialog(QDialog):
             msg.exec_()
             if msg.clickedButton() == btn_yes:
                 job_id = self.job_table.item(curr, 0).text()
-                conn = sqlite3.connect(DB_PATH)
-                cur = conn.cursor()
-                cur.execute("DELETE FROM jobs WHERE id=?", (job_id,))
-                conn.commit()
-                conn.close()
+                with db_lock:
+                    conn = sqlite3.connect(DB_PATH)
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+                    conn.commit()
+                    conn.close()
                 self.load_jobs()
 
 class MariaDBPasswordDialog(QDialog):
@@ -1296,6 +1311,8 @@ class ControlPanel(QWidget):
                 self.mysql_proc = proc
                 set_setting('mariadb_installed', '1')
             elif name == "redis": self.redis_proc = proc
+            
+            set_setting(f"{name}_pid", str(proc.pid))
             add_log(f"SUCCESS: {name} started (PID: {proc.pid})")
         except Exception as e:
             add_log(f"FAILED to start {name}: {str(e)}", "ERROR")
@@ -1303,47 +1320,54 @@ class ControlPanel(QWidget):
 
     def stop_service(self, name):
         add_log(f"Stopping service: {name}")
-        
-        # Mapping nama layanan ke nama file eksekutabel sesuai stop.php
-        exe_map = {
-            "apache": "httpd.exe",
-            "mysql": "mysqld.exe",
-            "redis": "redis-server.exe"
-        }
-        
-        exe_name = exe_map.get(name)
-        if exe_name:
-            # Menggunakan taskkill /F /IM untuk menghentikan proses secara paksa
-            # seperti pada logika stop.php
-            subprocess.run(["taskkill", "/F", "/IM", exe_name], 
-                           stdout=subprocess.DEVNULL, 
-                           stderr=subprocess.DEVNULL,
-                           creationflags=subprocess.CREATE_NO_WINDOW)
-            add_log(f"Command sent to stop {exe_name}")
+
+        proc = getattr(self, f"{name}_proc")
+        if proc and proc.poll() is None:
+            try:
+                # Graceful termination
+                proc.terminate()
+                proc.wait(timeout=5)
+                add_log(f"Service {name} terminated gracefully.")
+            except subprocess.TimeoutExpired:
+                add_log(f"Service {name} didn't stop in time, forcing kill...", "WARNING")
+                proc.kill()
+        else:
+            # Fallback menggunakan PID yang tersimpan di DB (jika aplikasi di-restart)
+            pid = get_setting(f"{name}_pid", "0")
+            if pid != "0":
+                # Taskkill tanpa /F mengirim signal penutupan yang sopan
+                subprocess.run(["taskkill", "/PID", pid], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+                add_log(f"Sent graceful termination to PID {pid}")
 
         setattr(self, f"{name}_proc", None)
+        set_setting(f"{name}_pid", "0")
         self.update_service_status()
 
     def load_logs(self):
         self.log_table.setRowCount(0)
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        # Tampilkan log terbaru di paling atas
-        cur.execute("SELECT timestamp, level, message FROM logs ORDER BY id DESC LIMIT 100")
-        for row_data in cur.fetchall():
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT timestamp, level, message FROM logs ORDER BY id DESC LIMIT 100")
+            logs = cur.fetchall()
+            conn.close()
+            
+        for row_data in logs:
             row_num = self.log_table.rowCount()
             self.log_table.insertRow(row_num)
             for i, data in enumerate(row_data):
                 self.log_table.setItem(row_num, i, QTableWidgetItem(str(data)))
-        conn.close()
         self.log_table.resizeColumnsToContents()
 
     def clear_logs(self):
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("DELETE FROM logs")
-        conn.commit()
-        conn.close()
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM logs")
+            conn.commit()
+            conn.close()
         self.load_logs()
 
 if __name__ == "__main__":
