@@ -597,6 +597,18 @@ class ControlPanel(QWidget):
         self.resize_timer = QTimer()
         self.resize_timer.setSingleShot(True)
         self.resize_timer.timeout.connect(self.save_window_size)
+        
+        # Tombol Apache (Gunakan satu tombol untuk Start/Stop)
+        self.btn_apache_toggle = QPushButton()
+        self.btn_apache_toggle.clicked.connect(lambda: self.toggle_service_action("apache", APACHE_PATH))
+
+        # MySQL
+        self.btn_mysql_toggle = QPushButton()
+        self.btn_mysql_toggle.clicked.connect(lambda: self.toggle_service_action("mysql", MYSQL_PATH))
+
+        # Redis
+        self.btn_redis_toggle = QPushButton()
+        self.btn_redis_toggle.clicked.connect(lambda: self.toggle_service_action("redis", REDIS_PATH))
 
         # Tambahkan padding horizontal agar caption tidak menyentuh tepi tombol
         self.setStyleSheet("""
@@ -727,11 +739,7 @@ class ControlPanel(QWidget):
         self.mysql_status = QLabel()
         self.redis_status = QLabel()
 
-        # Tombol Apache
-        self.btn_apache_manual = QPushButton()
-        self.btn_apache_manual.clicked.connect(lambda: self.run_service("apache", APACHE_PATH))
-        self.btn_apache_stop = QPushButton()
-        self.btn_apache_stop.clicked.connect(lambda: self.stop_service("apache"))
+        # Service Buttons (Access & Config)
         self.btn_apache_local = QPushButton()
         self.btn_apache_local.clicked.connect(lambda: self.change_access("apache", False))
         self.btn_apache_external = QPushButton()
@@ -739,26 +747,15 @@ class ControlPanel(QWidget):
         self.btn_apache_config = QPushButton()
         self.btn_apache_config.clicked.connect(lambda: self.open_config("apache", True))
 
-        # Tombol MariaDB
-        self.btn_mysql_manual = QPushButton()
-        self.btn_mysql_manual.clicked.connect(lambda: self.run_service("mysql", MYSQL_PATH))
-        self.btn_mysql_stop = QPushButton()
-        self.btn_mysql_stop.clicked.connect(lambda: self.stop_service("mysql"))
         self.btn_mysql_local = QPushButton()
         self.btn_mysql_local.clicked.connect(lambda: self.change_access("mysql", False))
         self.btn_mysql_external = QPushButton()
         self.btn_mysql_external.clicked.connect(lambda: self.change_access("mysql", True))
         self.btn_mysql_config = QPushButton()
         self.btn_mysql_config.clicked.connect(lambda: self.open_config("mysql", True))
-        # Tombol Password MariaDB
         self.btn_mysql_password = QPushButton()
         self.btn_mysql_password.clicked.connect(self.open_mysql_password_dialog)
 
-        # Tombol Redis
-        self.btn_redis_manual = QPushButton()
-        self.btn_redis_manual.clicked.connect(lambda: self.run_service("redis", REDIS_PATH))
-        self.btn_redis_stop = QPushButton()
-        self.btn_redis_stop.clicked.connect(lambda: self.stop_service("redis"))
         self.btn_redis_local = QPushButton()
         self.btn_redis_local.clicked.connect(lambda: self.change_access("redis", False))
         self.btn_redis_external = QPushButton()
@@ -784,32 +781,29 @@ class ControlPanel(QWidget):
         # Baris 0: Bahasa & Browser
         layout.addWidget(self.lang_selector, 0, 0, 1, 1)
         layout.addWidget(self.btn_open_browser, 0, 1, 1, 1)
-        layout.addWidget(self.btn_scheduler_settings, 0, 2, 1, 1)
-        layout.addWidget(self.btn_settings, 0, 3, 1, 1)
-        layout.addWidget(self.btn_minimize, 0, 4, 1, 1)
+        layout.addWidget(self.btn_minimize, 0, 2, 1, 1)
+        layout.addWidget(self.btn_scheduler_settings, 0, 3, 1, 1)
+        layout.addWidget(self.btn_settings, 0, 4, 1, 1)
         layout.addWidget(self.btn_mysql_password, 0, 5)
 
         # Baris 1: Apache (Status, Run, Stop, Local, External)
-        layout.addWidget(self.apache_status, 1, 0)
-        layout.addWidget(self.btn_apache_manual, 1, 1)
-        layout.addWidget(self.btn_apache_stop, 1, 2)
+        layout.addWidget(self.apache_status, 1, 0, 1, 2)
+        layout.addWidget(self.btn_apache_toggle, 1, 2)
         layout.addWidget(self.btn_apache_local, 1, 3)
         layout.addWidget(self.btn_apache_external, 1, 4)
         layout.addWidget(self.btn_apache_config, 1, 5);
 
         # Baris 2: MySQL
-        layout.addWidget(self.mysql_status, 2, 0)
-        layout.addWidget(self.btn_mysql_manual, 2, 1)
-        layout.addWidget(self.btn_mysql_stop, 2, 2)
+        layout.addWidget(self.mysql_status, 2, 0, 1, 2)
+        layout.addWidget(self.btn_mysql_toggle, 2, 2)
         layout.addWidget(self.btn_mysql_local, 2, 3)
         layout.addWidget(self.btn_mysql_external, 2, 4)
         layout.addWidget(self.btn_mysql_config, 2, 5)
         
 
         # Baris 3: Redis
-        layout.addWidget(self.redis_status, 3, 0)
-        layout.addWidget(self.btn_redis_manual, 3, 1)
-        layout.addWidget(self.btn_redis_stop, 3, 2)
+        layout.addWidget(self.redis_status, 3, 0, 1, 2)
+        layout.addWidget(self.btn_redis_toggle, 3, 2)
         layout.addWidget(self.btn_redis_local, 3, 3)
         layout.addWidget(self.btn_redis_external, 3, 4)
         layout.addWidget(self.btn_redis_config, 3, 5)
@@ -837,6 +831,18 @@ class ControlPanel(QWidget):
         self.status_timer.timeout.connect(self.update_service_status)
         self.status_timer.start(2000)
 
+    def toggle_service_action(self, name, path):
+        port_map = {
+            "apache": int(get_setting('apache_port', '80')),
+            "mysql": int(get_setting('mysql_port', '3306')),
+            "redis": int(get_setting('redis_port', '6379'))
+        }
+        
+        if is_port_in_use(port_map[name]):
+            self.stop_service(name)
+        else:
+            self.run_service(name, path)
+            
     def open_config(self, service, use_notepad=True):
         try:
             # Mapping path config per service
@@ -847,13 +853,13 @@ class ControlPanel(QWidget):
             }
 
             if service not in config_map:
-                QMessageBox.warning(self, tr(self.current_lang, "fatal_error_title"), f"{tr(lang, 'msg_unknown_service')}\n{service}")
+                QMessageBox.warning(self, tr(self.current_lang, "fatal_error_title"), f"{tr(self.current_lang, 'msg_unknown_service')}\n{service}")
                 return
 
             config_path = config_map[service]
 
             if not os.path.exists(config_path):
-                QMessageBox.warning(self, tr(self.current_lang, "fatal_error_title"), f"{tr(lang, 'msg_file_not_found')}\n{config_path}")
+                QMessageBox.warning(self, tr(self.current_lang, "fatal_error_title"), f"{tr(self.current_lang, 'msg_file_not_found')}\n{config_path}")
                 return
 
             # Buka dengan Notepad (default Windows)
@@ -879,29 +885,28 @@ class ControlPanel(QWidget):
             self.setLayoutDirection(Qt.LeftToRight)
 
     def update_texts(self):
-        self.btn_apache_manual.setText(tr(self.current_lang, "btn_apache_run"))
-        self.btn_apache_stop.setText(tr(self.current_lang, "btn_apache_stop"))
-        self.btn_apache_local.setText(tr(self.current_lang, "btn_apache_local"))
-        self.btn_apache_external.setText(tr(self.current_lang, "btn_apache_external"))
-        self.btn_apache_config.setText(tr(self.current_lang, "btn_apache_config"))
+        lang = self.current_lang
 
-        self.btn_mysql_manual.setText(tr(self.current_lang, "btn_mysql_run"))
-        self.btn_mysql_stop.setText(tr(self.current_lang, "btn_mysql_stop"))
-        self.btn_mysql_local.setText(tr(self.current_lang, "btn_mysql_local"))
-        self.btn_mysql_external.setText(tr(self.current_lang, "btn_mysql_external"))
-        self.btn_mysql_config.setText(tr(self.current_lang, "btn_mysql_config"))
-        self.btn_mysql_password.setText(tr(self.current_lang, "btn_reset_mysql_password"))
+        # Update teks tombol Apache (Toggle diupdate via update_service_status)
+        self.btn_apache_local.setText(tr(lang, "btn_apache_local"))
+        self.btn_apache_external.setText(tr(lang, "btn_apache_external"))
+        self.btn_apache_config.setText(tr(lang, "btn_apache_config"))
 
-        self.btn_redis_manual.setText(tr(self.current_lang, "btn_redis_run"))
-        self.btn_redis_stop.setText(tr(self.current_lang, "btn_redis_stop"))
-        self.btn_redis_local.setText(tr(self.current_lang, "btn_redis_local"))
-        self.btn_redis_external.setText(tr(self.current_lang, "btn_redis_external"))
-        self.btn_redis_config.setText(tr(self.current_lang, "btn_redis_config"))
+        # Update teks tombol MariaDB
+        self.btn_mysql_local.setText(tr(lang, "btn_mysql_local"))
+        self.btn_mysql_external.setText(tr(lang, "btn_mysql_external"))
+        self.btn_mysql_config.setText(tr(lang, "btn_mysql_config"))
+        self.btn_mysql_password.setText(tr(lang, "btn_reset_mysql_password"))
 
-        self.btn_open_browser.setText(tr(self.current_lang, "btn_open_browser"))
-        self.btn_minimize.setText(tr(self.current_lang, "btn_minimize"))
-        self.btn_settings.setText(tr(self.current_lang, "btn_settings"))
-        self.btn_scheduler_settings.setText(tr(self.current_lang, "btn_manage_scheduler"))
+        # Update teks tombol Redis
+        self.btn_redis_local.setText(tr(lang, "btn_redis_local"))
+        self.btn_redis_external.setText(tr(lang, "btn_redis_external"))
+        self.btn_redis_config.setText(tr(lang, "btn_redis_config"))
+
+        self.btn_open_browser.setText(tr(lang, "btn_open_browser"))
+        self.btn_minimize.setText(tr(lang, "btn_minimize"))
+        self.btn_settings.setText(tr(lang, "btn_settings"))
+        self.btn_scheduler_settings.setText(tr(lang, "btn_manage_scheduler"))
 
         self.show_action.setText(tr(self.current_lang, "tray_menu_show"))
         self.minimize_action.setText(tr(self.current_lang, "tray_menu_minimize"))
@@ -965,19 +970,25 @@ class ControlPanel(QWidget):
         return False
 
     def update_service_status(self):
-        online_str = tr(self.current_lang, "status_online")
-        offline_str = tr(self.current_lang, "status_offline")
+        lang = self.current_lang
+        online_str = tr(lang, "status_online")
+        offline_str = tr(lang, "status_offline")
 
         def get_status_info(name, port):
             is_running = is_port_in_use(port)
             is_online = self.check_online_config(name)
+            
+            # Perbarui label tombol toggle secara dinamis di sini
+            btn = getattr(self, f"btn_{name}_toggle")
+            btn.setText(tr(lang, f"btn_{name}_stop" if is_running else f"btn_{name}_run"))
+
             if is_running:
-                base_text = tr(self.current_lang, f"{name}_status_running")
+                base_text = tr(lang, f"{name}_status_running")
                 mode = online_str if is_online else offline_str
                 return f"{base_text} ({mode})", "color: green; font-weight: bold;"
             else:
-                return tr(self.current_lang, f"{name}_status"), "color: red;"
-
+                return tr(lang, f"{name}_status"), "color: red;"
+        
         # Apache
         port_apache = int(get_setting('apache_port', '80'))
         text, style = get_status_info("apache", port_apache)

@@ -31,3 +31,13 @@ python -m PyInstaller ^
   main.py
 
 ```
+
+# Without Compilation
+
+```bash
+py -m venv env
+.\env\Scripts\Activate.ps1
+pip install PyQt5 croniter
+python main.py
+
+```
