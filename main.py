@@ -5,7 +5,7 @@ from croniter import croniter
 from PyQt5.QtWidgets import (QApplication, QWidget, QPushButton, QLabel,
                              QGridLayout, QLineEdit, QTableWidget, QTableWidgetItem, QCheckBox,
                              QComboBox, QMessageBox,
-                             QSystemTrayIcon, QMenu, QAction, QStyle, QDialog)
+                             QSystemTrayIcon, QMenu, QAction, QStyle, QDialog, QHBoxLayout)
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
 
@@ -373,13 +373,16 @@ class SchedulerDialog(QDialog):
         self.job_table.itemClicked.connect(self.on_item_clicked)
         layout.addWidget(self.job_table, 4, 0, 1, 2)
         
+        btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(0, 0, 0, 0)
         self.btn_edit = QPushButton(tr(parent.current_lang, "btn_edit_job"))
         self.btn_edit.clicked.connect(self.edit_job)
-        layout.addWidget(self.btn_edit, 5, 0)
+        btn_layout.addWidget(self.btn_edit, 2) # Perbandingan lebar 2
         
         self.btn_delete = QPushButton(tr(parent.current_lang, "btn_delete_job"))
         self.btn_delete.clicked.connect(self.delete_job)
-        layout.addWidget(self.btn_delete, 5, 1)
+        btn_layout.addWidget(self.btn_delete, 1) # Perbandingan lebar 1
+        layout.addLayout(btn_layout, 5, 0, 1, 2)
 
         self.setLayout(layout)
         self.load_jobs()
@@ -409,10 +412,19 @@ class SchedulerDialog(QDialog):
         self.job_table.resizeColumnsToContents()
 
     def add_job(self):
+        cron = self.cron_input.text().strip()
+        cmd = self.cmd_input.text().strip()
+        if not cron:
+            QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_cron_empty"))
+            return
+        if not cmd:
+            QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_command_empty"))
+            return
+
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("INSERT INTO jobs (cron_expr, command, enabled) VALUES (?, ?, ?)", 
-                    (self.cron_input.text(), self.cmd_input.text(), 1 if self.chk_enabled.isChecked() else 0))
+                    (cron, cmd, 1 if self.chk_enabled.isChecked() else 0))
         conn.commit()
         conn.close()
         self.load_jobs()
@@ -420,11 +432,20 @@ class SchedulerDialog(QDialog):
     def edit_job(self):
         curr = self.job_table.currentRow()
         if curr >= 0:
+            cron = self.cron_input.text().strip()
+            cmd = self.cmd_input.text().strip()
+            if not cron:
+                QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_cron_empty"))
+                return
+            if not cmd:
+                QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_command_empty"))
+                return
+
             job_id = self.job_table.item(curr, 0).text()
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
             cur.execute("UPDATE jobs SET cron_expr=?, command=?, enabled=? WHERE id=?", 
-                        (self.cron_input.text(), self.cmd_input.text(), 1 if self.chk_enabled.isChecked() else 0, job_id))
+                        (cron, cmd, 1 if self.chk_enabled.isChecked() else 0, job_id))
             conn.commit()
             conn.close()
             self.load_jobs()
