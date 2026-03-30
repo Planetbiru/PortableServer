@@ -409,10 +409,19 @@ class SchedulerDialog(QDialog):
         self.job_table.resizeColumnsToContents()
 
     def add_job(self):
+        cron = self.cron_input.text().strip()
+        cmd = self.cmd_input.text().strip()
+        if not cron:
+            QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_cron_empty"))
+            return
+        if not cmd:
+            QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_command_empty"))
+            return
+
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("INSERT INTO jobs (cron_expr, command, enabled) VALUES (?, ?, ?)", 
-                    (self.cron_input.text(), self.cmd_input.text(), 1 if self.chk_enabled.isChecked() else 0))
+                    (cron, cmd, 1 if self.chk_enabled.isChecked() else 0))
         conn.commit()
         conn.close()
         self.load_jobs()
@@ -420,11 +429,20 @@ class SchedulerDialog(QDialog):
     def edit_job(self):
         curr = self.job_table.currentRow()
         if curr >= 0:
+            cron = self.cron_input.text().strip()
+            cmd = self.cmd_input.text().strip()
+            if not cron:
+                QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_cron_empty"))
+                return
+            if not cmd:
+                QMessageBox.warning(self, "Error", tr(self.parent.current_lang, "msg_command_empty"))
+                return
+
             job_id = self.job_table.item(curr, 0).text()
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
             cur.execute("UPDATE jobs SET cron_expr=?, command=?, enabled=? WHERE id=?", 
-                        (self.cron_input.text(), self.cmd_input.text(), 1 if self.chk_enabled.isChecked() else 0, job_id))
+                        (cron, cmd, 1 if self.chk_enabled.isChecked() else 0, job_id))
             conn.commit()
             conn.close()
             self.load_jobs()
