@@ -1,10 +1,10 @@
-# Portable Server Control Panel
+# Planetbiru Server Control Panel
 
 A lightweight, portable server management tool built with Python and PyQt5. This application allows you to manage Apache, MariaDB (MySQL), and Redis services with ease, featuring a built-in cron scheduler and activity logging.
 
 ## Advantages
 
-Portable Server Control Panel has several key advantages that distinguish it from many other server panels, especially those that are web-based or require complex installations:
+Planetbiru Server Control Panel has several key advantages that distinguish it from many other server panels, especially those that are web-based or require complex installations:
 
 ### Maximum Portability (True Portable)
 
@@ -62,7 +62,7 @@ The application automatically generates configuration files for Apache, MariaDB,
 
 ---
 
-In summary, Portable Server Control Panel stands out for its focus on portability, ease of use, security, and advanced automation capabilities—features that are rarely found together in other server panels. This makes it a highly valuable tool for developers and administrators seeking an efficient and reliable local server solution.
+In summary, Planetbiru Server Control Panel stands out for its focus on portability, ease of use, security, and advanced automation capabilities—features that are rarely found together in other server panels. This makes it a highly valuable tool for developers and administrators seeking an efficient and reliable local server solution.
 
 ## 🚀 Features
 

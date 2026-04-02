@@ -645,7 +645,7 @@ class MariaDBPasswordDialog(QDialog):
 class ControlPanel(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Server Control Panel")
+        self.setWindowTitle("Planetbiru Server Control Panel")
         self.move(100, 100)
         width = int(get_setting('window_width', '800'))
         height = int(get_setting('window_height', '600'))
@@ -1389,7 +1389,7 @@ if __name__ == "__main__":
     try:
         # Fix agar ikon muncul di taskbar & title bar pada Windows
         if os.name == 'nt':
-            myappid = 'kamshory.portableserver.panel.1.0'
+            myappid = 'planetbiru.portableserver.panel.1.0'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
         app = QApplication(sys.argv)
