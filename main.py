@@ -328,9 +328,14 @@ class SettingsDialog(QDialog):
         self.redis_port.setToolTip(tr(parent.current_lang, "help_redis_port"))
         layout.addWidget(self.redis_port, 2, 1)
         
+        btn_layout = QHBoxLayout()
+        self.btn_default = QPushButton(tr(parent.current_lang, "btn_default"))
+        self.btn_default.clicked.connect(self.reset_to_default)
         self.btn_save = QPushButton(tr(parent.current_lang, "btn_save"))
         self.btn_save.clicked.connect(self.save)
-        layout.addWidget(self.btn_save, 3, 0, 1, 2)
+        btn_layout.addWidget(self.btn_default)
+        btn_layout.addWidget(self.btn_save)
+        layout.addLayout(btn_layout, 3, 0, 1, 2)
         
         self.setLayout(layout)
         direction = self.parent.get_lang_dir(self.parent.current_lang)
@@ -342,6 +347,11 @@ class SettingsDialog(QDialog):
         set_setting('redis_port', self.redis_port.text())
         self.parent.apply_port_settings()
         self.accept()
+
+    def reset_to_default(self):
+        self.apache_port.setText("80")
+        self.mysql_port.setText("3306")
+        self.redis_port.setText("6379")
 
 class SchedulerDialog(QDialog):
     def __init__(self, parent):
@@ -1293,15 +1303,24 @@ class ControlPanel(QWidget):
         try:
             args = [path]
             if name == "apache":
+                # Refresh config dari template sebelum jalan
+                replace_and_write("httpd-template.conf", os.path.join(BASE_PATH, "config", "httpd.conf"))
+                replace_and_write("php-template.ini", os.path.join(BASE_PATH, "php", "php.ini"))
+                set_apache_access(get_setting('apache_access_mode', 'local') == 'external', force=True)
                 conf = os.path.join(BASE_PATH, "config", "httpd.conf")
                 args.extend(["-f", conf])
             elif name == "mysql":
+                # Refresh config dari template sebelum jalan
+                replace_and_write("my-template.ini", os.path.join(BASE_PATH, "config", "my.ini"))
+                set_mysql_access(get_setting('mysql_access_mode', 'local') == 'external', force=True)
                 conf = os.path.join(BASE_PATH, "config", "my.ini")
                 args.append(f"--defaults-file={conf}")
             elif name == "redis":
+                # Refresh config dari template sebelum jalan
+                replace_and_write("redis.windows-template.conf", os.path.join(BASE_PATH, "redis", "redis.windows.conf"))
+                set_redis_access(get_setting('redis_access_mode', 'local') == 'external', force=True)
                 conf = os.path.join(BASE_PATH, "redis", "redis.windows.conf")
-                if os.path.exists(conf):
-                    args.append(conf)
+                args.append(conf)
 
             add_log(f"Starting {name}: {' '.join(args)}")
             proc = subprocess.Popen(args, cwd=service_root, creationflags=subprocess.CREATE_NO_WINDOW)
